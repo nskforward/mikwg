@@ -10,7 +10,8 @@
 > роутере и в `rscgen`. **Подход изменён:** mikwg больше не выполняет factory reset —
 > роутер готовит пользователь (см. README), маршрутизация в туннель выборочная,
 > через существующие `to_vpn_list` / `to_vpn_table`. **Установка — из Docker Hub:**
-> образ `nskforward/mikwg` (текущий релиз `1.0.1`) собирается без Docker-демона и
+> образ `nskforward/mikwg` (текущий релиз `1.1.1`, параметры через `/container/envs`)
+> собирается без Docker-демона и
 > публикуется GitHub Actions; роутер забирает его через `/container/add
 > remote-image=`, загрузка tar в Files не требуется.
 
@@ -783,6 +784,36 @@ README актуализирован: установка и обновление 
 (`HeaderProtectionKey` фиксирован, нужно ≤16 Б keystream), обязательны
 golden-тесты против `golang.org/x/crypto/chacha20` на случайных nonce. Включать по
 результатам замера на роутере (остаточный GC на целевой скорости).
+
+---
+
+## Конфигурация через `/container/envs` (v1.1.1, 2026-10-03) — ✅ выполнено
+
+Параметры обфускации больше не передаются смонтированным `awg0.conf`, а
+задаются environment-переменными контейнера — так их можно точечно менять прямо
+в RouterOS/Winbox и применять через `/container/restart`.
+
+- **`internal/config.ApplyEnviron`**: по-полевое переопределение из
+  `KEY=VALUE`-окружения (имена регистронезависимы, синтаксис значений 1:1 с
+  `awg0.conf`). Приоритет: флаги > env > файл > дефолты.
+- **`cmd/awg-converter`**: `-conf` опционален (отсутствие файла — не ошибка);
+  `LISTEN`/`JITTER`/`VERBOSE` читаются из env; в лог добавлен источник конфига
+  (`config source: env` / `file` / `file+env`).
+- **`cmd/rscgen`**: по умолчанию генерирует список `/container/envs` `awg-env`
+  (UPSTREAM, S1–S4, H1–H4, JC/JMIN/JMAX, HPK, I1–I5) и вешает `envs=awg-env` на
+  контейнер; mount `awg0.conf` не создаётся. При импорте в существующий
+  контейнер скрипт сначала при необходимости обновляет `remote-image` +
+  `/container/update`, затем переключает контейнер на env-режим и снимает
+  старый mount. Флаг `-conf-mount` сохраняет прежний файловый режим, `-env-list`
+  переопределяет имя списка.
+- **Безопасность**: `HPK` теперь виден в `/container/envs/print` и `/export`
+  (это ключ обфускации, а не аутентификации; `PrivateKey` по-прежнему только в
+  `/interface/wireguard`). Предупреждение добавлено в README.
+- **Тесты**: `internal/config` (переопределение, env-only == файл, ошибки с
+  именем переменной), `cmd/rscgen` (env-режим, legacy mount-режим, `buildEnvs`,
+  экранирование значений).
+- **Правка значения**: `/container/envs/set [find where list=awg-env && key="S4"] value=16`
+  + `/container/restart awg-converter` (в Winbox — Container → Envs).
 
 ---
 

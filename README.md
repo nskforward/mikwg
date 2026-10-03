@@ -36,10 +36,11 @@ AmneziaWG не меняет криптографию WireGuard: все его м
 - **Рабочая конфигурация роутера** — mikwg не выполняет factory reset и
   не заменяет вашу конфигурацию, а дополняет её
 - Пакет `container` той же версии RouterOS
-- Внешний носитель (USB/SATA), смонтированный в RouterOS: на нём лежит
-  `awg0.conf` (по умолчанию `/usb1/awg-config/awg0.conf`) и образ контейнера
-  (по умолчанию `usb1/images/awg-converter`, staging `usb1/tmp`). Для
-  `remote-image` это важно: загрузка требует места больше, чем доступно во flash
+- Внешний носитель (USB/SATA), смонтированный в RouterOS: на нём лежит образ
+  контейнера (по умолчанию `usb1/images/awg-converter`, staging `usb1/tmp`). Для
+  `remote-image` это важно: загрузка требует места больше, чем доступно во flash.
+  Сам `awg0.conf` на роутере **не нужен** — параметры обфускации передаются в
+  контейнер как environment-переменные (см. ниже)
 - ≥ 64 МБ свободного места во flash (сам образ кладётся на носитель)
 - Конфиг AmneziaWG 3.1 (поля `S1-S4`, `H1-H4`, `HeaderProtectionKey`, `Jc/Jmin/Jmax`, `I1-I5`)
 - Для выборочной маршрутизации — address-list `to_vpn_list` (создаётся заранее
@@ -54,7 +55,7 @@ AmneziaWG не меняет криптографию WireGuard: все его м
 
 Готовый образ публикуется в Docker Hub как **`nskforward/mikwg`**:
 
-- `nskforward/mikwg:1.0.1` — зафиксированная версия (рекомендуется);
+- `nskforward/mikwg:1.1.1` — зафиксированная версия (рекомендуется);
 - `nskforward/mikwg:latest` — последний релиз.
 
 Роутер забирает его напрямую при установке (`/container/add remote-image=...`),
@@ -76,16 +77,23 @@ Docker-образ для локальной проверки.
 `rscgen` читает **реальный** `awg0.conf` (вместе с секретами) и пишет скрипт
 развёртывания:
 ```bash
-go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.1 -out routeros.generated.rsc
+go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.1.1 -out routeros.generated.rsc
 ```
 Полезные флаги: `-image` (образ из Docker Hub; по умолчанию
-`nskforward/mikwg:1.0.1`; пустая строка + `-tar` включает оффлайн-режим),
+`nskforward/mikwg:1.1.1`; пустая строка + `-tar` включает оффлайн-режим),
 `-addr-list` (умолч. `to_vpn_list`), `-rt-table` (умолч.
 `to_vpn_table`), `-conn-mark` (умолч. `to_vpn_mark`), `-wan-iface-list` (умолч.
 `WAN`), `-wan-gw` (next-hop для антилуп-маршрута; по умолчанию определяется
 автоматически из основного default-маршрута — **указывайте IP шлюза, а не
 интерфейс**), `-root-dir`/`-tmpdir` (каталоги на внешнем носителе для
-`remote-image`), `-tar`, `-wg-name`, `-wg-port`.
+`remote-image`), `-tar`, `-wg-name`, `-wg-port`, `-env-list` (имя env-списка,
+умолч. `awg-env`), `-conf-mount` (устаревший режим: читать `awg0.conf` из
+смонтированного файла вместо env-переменных).
+
+`rscgen` по умолчанию выносит параметры обфускации в environment-переменные
+контейнера (`/container/envs`): в генерируемом скрипте создаётся список
+`awg-env` (из тех же полей `awg0.conf`), а контейнер запускается с `envs=awg-env`.
+Файл `awg0.conf` на роутер копировать не нужно, монтирование не создаётся.
 
 > ⚠️ Антилуп-маршрут до IP сервера должен указывать на **реальный next-hop**
 > (`gateway=192.168.1.1`), а не на интерфейс (`gateway=ether1`). Interface-route
@@ -113,9 +121,10 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.1 -out routeros.
    ```rsc
    /system/device-mode/update container=yes
    ```
-4. Положите конфиг `awg0.conf` в `/usb1/awg-config/awg0.conf` — образ роутер
-   скачает сам из Docker Hub. Для оффлайн-установки дополнительно загрузите
-   собранный `awg-converter-arm64.tar` в Files.
+4. Образ роутер скачает сам из Docker Hub (параметры обфускации приедут
+   env-переменными из сгенерированного скрипта, `awg0.conf` на роутер копировать
+   не нужно). Для оффлайн-установки дополнительно загрузите собранный
+   `awg-converter-arm64.tar` в Files.
 5. Убедитесь, что доступ к управлению переживёт изменения (LAN-порт или
    Winbox-by-MAC).
 
@@ -127,10 +136,14 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.1 -out routeros.
 
 Скрипт **идемпотентен** (повторный импорт безопасен) и:
 
-- создаёт veth/bridge/NAT для контейнера, монтирует конфиг read-only;
+- создаёт veth/bridge/NAT для контейнера и список `/container/envs` `awg-env` с
+  параметрами обфускации (режим `-conf-mount` вместо этого монтирует `awg0.conf`
+  read-only);
 - настраивает `/container/config` (`registry-url`, `tmpdir`) и по `remote-image`
   скачивает образ `nskforward/mikwg` из Docker Hub, затем запускает контейнер
-  `awg-converter` (при оффлайн-режиме — импортирует локальный tar);
+  `awg-converter` с `envs=awg-env` (при оффлайн-режиме — импортирует локальный
+  tar). Если контейнер уже существует и тег образа отличается, скрипт сам
+  переключит `remote-image` и выполнит `/container/update`;
 - поднимает WireGuard с endpoint на контейнер (приватный ключ остаётся в RouterOS);
 - добавляет антилуп-маршрут до IP сервера через реальный WAN next-hop;
 - добавляет srcnat в туннель (`out-interface=awg`), чтобы трафик роутера и
@@ -146,6 +159,8 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.1 -out routeros.
 ```rsc
 # контейнер скачан и запущен
 /container/print
+# параметры обфускации, переданные в контейнер
+/container/envs/print where list=awg-env
 # рукопожатие с сервером установлено (last-handshake обновляется)
 /interface/wireguard/peers/print
 # трафик до адреса из to_vpn_list уходит через туннель
@@ -154,8 +169,9 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.1 -out routeros.
 
 При первом импорте контейнер сначала скачивает и распаковывает образ из Docker
 Hub (статус проходит через загрузку/extract) — это занимает несколько секунд.
-В логе появится строка `mikwg awg-converter <версия>` с параметрами обфускации
-(без секретов): `/log/print where message~"awg-converter"`.
+В логе появится строка `mikwg awg-converter <версия>`, строка источника конфига
+(`config source: env`) и параметры обфускации (без секретов):
+`/log/print where message~"awg-converter"` или `/log/print where topics~"container"`.
 
 > ICMP до внутреннего адреса сервера (`ping 10.8.2.1`) на многих VPN-серверах не
 > проходит — это нормально. Критерий работоспособности — TCP-трафик через
@@ -163,19 +179,49 @@ Hub (статус проходит через загрузку/extract) — эт
 
 ## Обновление
 
+### Параметры обфускации (S/H/HPK/Jc/I1)
+
+Параметры живут в `/container/envs` (список `awg-env`), поэтому пересборка образа
+и заливка файлов не нужны. Меняйте по одному значению прямо в RouterOS:
+
+```rsc
+# посмотреть текущие значения
+/container/envs/print where list=awg-env
+# изменить одно значение ...
+/container/envs/set [find where list=awg-env && key="S4"] value=16
+# ... и применить
+/container/restart awg-converter
+```
+
+В Winbox: раздел **Container → Envs**, двойной клик по значению, правка, затем
+Restart контейнера. После перезапуска проверьте лог
+(`/log/print where message~"awg-converter"`): конвертер печатает эффективные
+S/H/HPK/Jc/I1 без секретов.
+
+Если провайдер прислал новый `awg0.conf` — сгенерируйте скрипт заново и
+импортируйте его: список `awg-env` пересобирается целиком из конфига (ручные
+правки envs при этом перезаписываются значениями из файла).
+
+> ⚠️ `HeaderProtectionKey` теперь хранится в env и попадает в `/container/envs/print`
+> и `/export` роутера. Это ключ обфускации, а не аутентификации, и он и так
+> передаётся контейнеру; приватный ключ WireGuard по-прежнему остаётся только в
+> `/interface/wireguard`. Экспорты роутера не публикуйте.
+
+### Образ контейнера
+
 Образ тянется из Docker Hub, поэтому для обновления не нужен ни Winbox, ни tar:
 
 1. Переключите `remote-image` на новый тег и обновите образ:
    ```rsc
-   /container/set awg-converter remote-image=nskforward/mikwg:1.1.0
+   /container/set awg-converter remote-image=nskforward/mikwg:1.1.1
    /container/update awg-converter
    ```
    `/container/update` перекачивает и распаковывает образ, заменяя старый. Если
    `update` не сработал — `/container/remove awg-converter` и повторный
    `/import file=routeros.generated.rsc`, сгенерированный с новым `-image`.
-2. Параметры обфускации (S/H/HPK/Jc/I1) живут в смонтированном `awg0.conf`,
-   пересборка образа не нужна: замените файл на роутере и выполните
-   `/container/restart awg-converter`.
+2. Сгенерированный скрипт 1.1.1 при импорте сам сначала обновляет образ, а затем
+   переключает контейнер на env-режим (снимая старый mount), поэтому переход с
+   версий ≤ 1.0.1 делается одним импортом.
 
 > Оффлайн-установка обновляется через `-tar`: загрузите новый
 > `awg-converter-arm64.tar` в Files, затем `/container/remove awg-converter` и
@@ -234,16 +280,37 @@ Hub (статус проходит через загрузку/extract) — эт
 
 ## Конфигурация конвертера
 
-Источник параметров — смонтированный `awg0.conf` (`PrivateKey` пропускается и не
-используется). Флаги:
+Основной источник параметров — **environment-переменные контейнера** (RouterOS
+`/container/envs`, список `awg-env`), значения в том же синтаксисе, что и поля
+`awg0.conf`:
+
+| Переменная | Пример | Назначение |
+|---|---|---|
+| `UPSTREAM` | `203.0.113.10:51822` | адрес AmneziaWG-сервера (обязателен) |
+| `S1`–`S4` | `129` / `106` / `23` / `12` | префикс-паддинг |
+| `H1`–`H4` | `1` / `2` / `3` / `4` (`lo-hi`) | идентификаторы типов |
+| `HPK` | base64 | HeaderProtectionKey (псевдоним `HEADERPROTECTIONKEY`) |
+| `JC` / `JMIN` / `JMAX` | `3` / `56` / `188` | мусорные пакеты |
+| `I1`–`I5` | `<r 226>` | CPS-приманки (пустые не отправляются) |
+| `LISTEN` | `0.0.0.0:51820` | адрес, куда шлёт kernel WireGuard (endpoint пира) |
+| `JITTER` | `1` | тайминговый джиттер initiation-пакетов |
+| `VERBOSE` | `1` | подробный лог |
+
+Имена переменных регистронезависимы, неизвестные игнорируются. Приоритет:
+**флаги > env > файл > дефолты**. Если указан `-conf` (или существует
+`/etc/awg/awg0.conf`), файл читается как база, а env-переменные перекрывают
+отдельные поля; без файла конвертер стартует только на env. `PrivateKey` не
+используется и никогда не попадает в контейнер.
+
+Флаги (имеют приоритет над env):
 
 | Флаг | По умолчанию | Описание |
 |---|---|---|
-| `-conf` | `/etc/awg/awg0.conf` | путь к конфигу |
-| `-listen` | `0.0.0.0:51820` | адрес, куда шлёт kernel WireGuard (endpoint пира) |
-| `-upstream` | из `Endpoint` conf | адрес AmneziaWG-сервера |
-| `-jitter` | `false` | тайминговый джиттер initiation-пакетов |
-| `-v` | `false` | подробный лог |
+| `-conf` | `/etc/awg/awg0.conf` | путь к конфигу; отсутствие файла — не ошибка (env-only) |
+| `-listen` | `0.0.0.0:51820` | адрес, куда шлёт kernel WireGuard (env `LISTEN`) |
+| `-upstream` | из `UPSTREAM`/`Endpoint` | адрес AmneziaWG-сервера |
+| `-jitter` | `false` | тайминговый джиттер (env `JITTER`) |
+| `-v` | `false` | подробный лог (env `VERBOSE`) |
 | `-version` | | версия |
 
 ## Что воспроизводится из AmneziaWG 3.1
@@ -281,7 +348,7 @@ GitHub Release. Нужны секреты репозитория `DOCKER_USERNAM
 
 Пакеты:
 - `internal/awg` — трансформации проводного формата (ядро решения);
-- `internal/config` — парсер `awg0.conf`;
+- `internal/config` — парсер `awg0.conf` и environment-переменных;
 - `internal/proxy` — UDP-прокси;
 - `cmd/awg-converter`, `cmd/rscgen`, `cmd/imagetool`.
 
@@ -322,14 +389,16 @@ Hot path конвертера оптимизирован под минимум �
   в реестре обязан иметь **gzip**-слой (официальный `nskforward/mikwg` — имеет).
   Оффлайн-tar, наоборот, требует **несжатый** слой.
 - **Контейнер стартует, но `last-handshake` не обновляется.** Проверьте лог
-  контейнера (параметры S/H/HPK распознаны из `awg0.conf`), доступность
-  `Endpoint`-адреса сервера и что антилуп-маршрут до IP сервера указывает на
-  реальный WAN next-hop, а не на интерфейс.
+  контейнера (источник конфига и распознанные S/H/HPK), значения
+  `/container/envs/print where list=awg-env` (`UPSTREAM` должен указывать на
+  сервер, `S1–S4 ≥ 12` при заданном `HPK`), доступность адреса сервера и что
+  антилуп-маршрут до IP сервера указывает на реальный WAN next-hop, а не на
+  интерфейс.
 - **Handshake проходит, data не идёт.** Почти всегда — нет srcnat в туннель
   (`out-interface=awg`) либо reply-loop из-за порядка mangle-правил; разбор в
   разделе «Выборочная маршрутизация».
 - **После перезагрузки контейнер не поднялся.** Проверьте `start-on-boot=yes` и
-  что внешний носитель смонтирован (образ и конфиг лежат на нём).
+  что внешний носитель смонтирован (образ лежит на нём).
 - **ICMP через туннель не проходит.** На многих VPN-серверах это ожидаемо; TCP
   при этом работает. Не считайте это поломкой.
 

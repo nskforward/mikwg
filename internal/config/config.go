@@ -167,6 +167,57 @@ func (c *Config) setPeer(key, val string) error {
 	return nil
 }
 
+// envBindings maps environment variable names (matched case-insensitively) to
+// the config section and key understood by set. Values use exactly the same
+// syntax as the corresponding awg0.conf field, so a single parser serves both
+// sources. Only fields the converter actually uses are exposed; the WireGuard
+// private key never leaves the router.
+var envBindings = map[string][2]string{
+	"S1":                  {"interface", "s1"},
+	"S2":                  {"interface", "s2"},
+	"S3":                  {"interface", "s3"},
+	"S4":                  {"interface", "s4"},
+	"H1":                  {"interface", "h1"},
+	"H2":                  {"interface", "h2"},
+	"H3":                  {"interface", "h3"},
+	"H4":                  {"interface", "h4"},
+	"JC":                  {"interface", "jc"},
+	"JMIN":                {"interface", "jmin"},
+	"JMAX":                {"interface", "jmax"},
+	"I1":                  {"interface", "i1"},
+	"I2":                  {"interface", "i2"},
+	"I3":                  {"interface", "i3"},
+	"I4":                  {"interface", "i4"},
+	"I5":                  {"interface", "i5"},
+	"HPK":                 {"interface", "headerprotectionkey"},
+	"HEADERPROTECTIONKEY": {"interface", "headerprotectionkey"},
+	"UPSTREAM":            {"peer", "endpoint"},
+}
+
+// ApplyEnviron applies obfuscation settings from KEY=VALUE environment entries
+// and returns how many bindings were applied. It is meant to run after
+// ParseFile so that environment values override the file: the effective
+// precedence is defaults < conf < environment < flags. Unknown variables are
+// ignored.
+func (c *Config) ApplyEnviron(environ []string) (int, error) {
+	applied := 0
+	for _, kv := range environ {
+		name, val, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		bind, ok := envBindings[strings.ToUpper(name)]
+		if !ok {
+			continue
+		}
+		if err := c.set(bind[0], bind[1], strings.TrimSpace(val)); err != nil {
+			return applied, fmt.Errorf("%s: %w", name, err)
+		}
+		applied++
+	}
+	return applied, nil
+}
+
 // AWGParams builds the obfuscation parameter set.
 func (c *Config) AWGParams() (*awg.Params, error) {
 	p := &awg.Params{

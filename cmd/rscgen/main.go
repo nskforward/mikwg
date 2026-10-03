@@ -10,9 +10,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"text/template"
 
 	"github.com/nskforward/mikwg/internal/config"
@@ -45,6 +48,23 @@ type data struct {
 	AddrList       string
 	ConnMark       string
 	ContainerDNS   string
+
+	// Environment-variable configuration mode.
+	EnvMode bool
+	EnvList string
+	Envs    []envEntry
+}
+
+// envEntry is one RouterOS container environment variable, e.g. S4=16.
+type envEntry struct {
+	Key   string
+	Value string
+}
+
+// rscQuote escapes a value for a double-quoted RouterOS script string.
+func rscQuote(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`)
+	return r.Replace(s)
 }
 
 const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireGuard + container)
@@ -56,15 +76,24 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 #      and DOWNLOAD both files to your workstation;
 #   2) upload container-<ver>-arm64.npk to Files, reboot;
 #   3) /system/device-mode/update container=yes, reboot;
-#   4) put awg0.conf at /usb1/awg-config/awg0.conf;
+#   4) {{if .EnvMode}}obfuscation parameters are delivered as container environment
+#      variables ({{.EnvList}}), so awg0.conf does NOT need to be copied to the
+#      router;{{else}}put awg0.conf at /usb1/awg-config/awg0.conf;{{end}}
 #      {{if .Image}}the router pulls the image from {{.RegistryURL}} automatically
 #      (internet access is required);{{else}}upload {{.ContainerTar}} to Files;{{end}}
 #   5) make sure management access survives the changes (LAN port / Winbox-by-MAC);
 #      see docs/safe-operations.md.
+#      If an older mikwg image is already installed, this script updates it first.
 #
 # Run with:  /import file=routeros.generated.rsc
 # The script is idempotent: existing objects are detected and reused, so it is
 # safe to import over a working configuration.
+#
+# {{if .EnvMode}}Change one obfuscation parameter in place and apply it with:
+#   /container/envs/set [find where list="{{.EnvList}}" && key="S4"] value=16
+#   /container/restart {{.Container}}
+# In Winbox: container "{{.Container}}" -> Envs, edit the value, then Restart.
+# Re-importing this script rebuilds the whole list from awg0.conf.{{end}}
 #
 # Selective routing reuses the pre-existing list {{.AddrList}} and table
 # {{.RTTable}}: destinations added to the list are routed through the tunnel.
@@ -96,10 +125,16 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 }
 
 # --- 2. Container ---------------------------------------------------------
+{{if .EnvMode}}# Obfuscation parameters are delivered as container environment variables, so a
+# single value can be changed in place and applied with a restart (see the top
+# of this file). The whole list is rebuilt from awg0.conf on every import.
+:do { /container/envs/remove [find where list="{{.EnvList}}"] } on-error={}
+{{range .Envs}}/container/envs/add list={{$.EnvList}} key="{{.Key}}" value="{{.Value}}"
+{{end}}{{else}}# Parameters are read from awg0.conf, mounted read-only at /etc/awg.
 :if ([:len [/container/mounts find where list="awg-cfg"]] = 0) do={
     /container/mounts/add list=awg-cfg src=/usb1/awg-config dst=/etc/awg mode=ro
 }
-# RouterOS refuses to start a container when /ip/dns has no static servers
+{{end}}# RouterOS refuses to start a container when /ip/dns has no static servers
 # (e.g. DoH-only setup), so an explicit dns= override is required.
 {{if .Image}}:if ([:len [/container/find name="{{.Container}}"]] = 0) do={
     # Pull the linux/arm64 image straight from {{.RegistryURL}}. tmpdir is a
@@ -107,16 +142,28 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
     # remote-image staging needs more space than the flash may have.
     /container/config/set registry-url={{.RegistryURL}} tmpdir={{.TmpDir}}
     /container/add remote-image={{.Image}} interface=veth-awg root-dir={{.RootDir}} \
-        mountlists=awg-cfg entrypoint=/awg-converter dns={{.ContainerDNS}} \
+        {{if .EnvMode}}envs={{.EnvList}}{{else}}mountlists=awg-cfg{{end}} entrypoint=/awg-converter dns={{.ContainerDNS}} \
         start-on-boot=yes logging=yes name={{.Container}}
 }
 {{else}}:if ([:len [/container/find name="{{.Container}}"]] = 0) do={
-    /container/add file={{.ContainerTar}} interface=veth-awg mountlists=awg-cfg \
+    /container/add file={{.ContainerTar}} interface=veth-awg {{if .EnvMode}}envs={{.EnvList}}{{else}}mountlists=awg-cfg{{end}} \
         entrypoint=/awg-converter dns={{.ContainerDNS}} start-on-boot=yes logging=yes \
         name={{.Container}}
 }
 {{end}}:if ([:len [/container/find name="{{.Container}}"]] > 0) do={
-    :do { /container/start {{.Container}} } on-error={}
+{{if .Image}}    # Pull the target image if it differs, so the container always runs a binary
+    # that understands environment-variable configuration.
+    :if ([/container/get [find name="{{.Container}}"] remote-image] != "{{.Image}}") do={
+        :do { /container/stop {{.Container}} } on-error={}
+        /container/set [find name="{{.Container}}"] remote-image={{.Image}}
+        :do { /container/update {{.Container}} } on-error={}
+    }
+{{end}}{{if .EnvMode}}    # Migrate an existing container to environment-variable config and detach
+    # the legacy read-only awg0.conf mount, if any.
+    :do { /container/stop {{.Container}} } on-error={}
+    /container/set [find name="{{.Container}}"] envs={{.EnvList}} mountlists=""
+    :do { /container/mounts/remove [find where list="awg-cfg"] } on-error={}
+{{end}}    :do { /container/start {{.Container}} } on-error={}
 }
 
 # --- 3. WireGuard (private key stays on the router) -----------------------
@@ -261,7 +308,7 @@ func main() {
 	wanGW := flag.String("wan-gw", "", "WAN next-hop for the anti-loop route; empty = auto-detect from the main default route (pass the gateway IP, not the interface)")
 	wanList := flag.String("wan-iface-list", "WAN", "interface list used for masquerade")
 	tar := flag.String("tar", "awg-converter-arm64.tar", "container image tar filename on the router (used when -image is empty)")
-	image := flag.String("image", "nskforward/mikwg:1.0.1", "container image to pull from the registry; empty = import the tar instead")
+	image := flag.String("image", "nskforward/mikwg:1.1.1", "container image to pull from the registry; empty = import the tar instead")
 	registry := flag.String("registry", "https://registry-1.docker.io", "registry the router pulls the image from")
 	rootDir := flag.String("root-dir", "usb1/images/awg-converter", "on-router directory where the pulled image is extracted (external storage recommended)")
 	tmpDir := flag.String("tmpdir", "usb1/tmp", "global /container/config tmpdir used while pulling the image (external storage recommended)")
@@ -273,6 +320,8 @@ func main() {
 	addrList := flag.String("addr-list", "to_vpn_list", "firewall address list whose destinations are routed through the tunnel (reused if it already exists)")
 	connMark := flag.String("conn-mark", "to_vpn_mark", "connection mark used for policy routing (fasttrack rules are made to exclude it)")
 	containerDNS := flag.String("container-dns", "1.1.1.1", "DNS server the container inherits (required by RouterOS if /ip/dns has no static servers)")
+	confMount := flag.Bool("conf-mount", false, "read parameters from a mounted awg0.conf instead of container environment variables (legacy mode)")
+	envList := flag.String("env-list", "awg-env", "RouterOS container env list name used to pass obfuscation parameters")
 	flag.Parse()
 
 	cfg, err := config.ParseFile(*confPath)
@@ -321,12 +370,17 @@ func main() {
 		AddrList:       *addrList,
 		ConnMark:       *connMark,
 		ContainerDNS:   *containerDNS,
+		EnvMode:        !*confMount,
+		EnvList:        *envList,
 	}
 	if d.MTU == 0 {
 		d.MTU = 1408
 	}
 	if d.DNS == "" {
 		d.DNS = "1.1.1.1,8.8.8.8"
+	}
+	if d.EnvMode {
+		d.Envs = buildEnvs(cfg, net.JoinHostPort(host, port))
 	}
 
 	f, err := os.Create(*out)
@@ -341,6 +395,36 @@ func main() {
 	}
 	log.Printf("wrote %s (server %s:%s, wg iface %s, mtu %d, list %s, table %s, mark %s)",
 		*out, host, port, d.WGName, d.MTU, d.AddrList, d.RTTable, d.ConnMark)
+}
+
+// buildEnvs assembles the container environment variables for EnvMode from the
+// parsed config. Only parameters the converter actually uses are exported; the
+// WireGuard private key, address, DNS, MTU and timers are intentionally omitted.
+func buildEnvs(cfg *config.Config, upstream string) []envEntry {
+	envs := []envEntry{{Key: "UPSTREAM", Value: rscQuote(upstream)}}
+	add := func(key, val string) {
+		envs = append(envs, envEntry{Key: key, Value: rscQuote(val)})
+	}
+	add("S1", strconv.Itoa(cfg.S1))
+	add("S2", strconv.Itoa(cfg.S2))
+	add("S3", strconv.Itoa(cfg.S3))
+	add("S4", strconv.Itoa(cfg.S4))
+	add("H1", cfg.H1.String())
+	add("H2", cfg.H2.String())
+	add("H3", cfg.H3.String())
+	add("H4", cfg.H4.String())
+	add("JC", strconv.Itoa(cfg.Jc))
+	add("JMIN", strconv.Itoa(cfg.Jmin))
+	add("JMAX", strconv.Itoa(cfg.Jmax))
+	if cfg.HeaderProtectionKey != "" {
+		add("HPK", cfg.HeaderProtectionKey)
+	}
+	for i, spec := range cfg.I {
+		if spec != "" {
+			add(fmt.Sprintf("I%d", i+1), spec)
+		}
+	}
+	return envs
 }
 
 // hostOnly strips a CIDR suffix, e.g. "10.8.2.5/32" -> "10.8.2.5".

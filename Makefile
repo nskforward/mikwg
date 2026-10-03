@@ -1,7 +1,7 @@
 GO       ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 REGISTRY ?= docker.io/nskforward/mikwg
 IMAGE    ?= $(REGISTRY)
-VERSION  ?= 1.0.1
+VERSION  ?= 1.1.1
 TAR      ?= awg-converter-arm64.tar
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 
