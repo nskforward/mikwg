@@ -202,19 +202,29 @@ func (p *Proxy) setRouter(ap netip.AddrPort) {
 	p.router.Store(&ap)
 }
 
+// report logs a stats line only when a health signal changed: the drop
+// counters grew since the previous tick. A healthy proxy stays silent, so a
+// long-running production log is not flooded with one line per minute. With
+// -v the old per-minute heartbeat is kept for diagnostics.
 func (p *Proxy) report(ctx context.Context) {
 	t := time.NewTicker(60 * time.Second)
 	defer t.Stop()
+	var lastRouterDropped, lastUpstreamDropped uint64
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			log.Printf("stats: ->upstream %d pkt/%d B, ->router %d pkt/%d B, decoys %d, dropped router/upstream %d/%d",
-				p.stats.ToUpstreamPackets.Load(), p.stats.ToUpstreamBytes.Load(),
-				p.stats.ToRouterPackets.Load(), p.stats.ToRouterBytes.Load(),
-				p.stats.Decoys.Load(),
-				p.stats.FromRouterDropped.Load(), p.stats.FromUpstreamDropped.Load())
+			rd := p.stats.FromRouterDropped.Load()
+			ud := p.stats.FromUpstreamDropped.Load()
+			if p.verbose || rd != lastRouterDropped || ud != lastUpstreamDropped {
+				log.Printf("stats: ->upstream %d pkt/%d B, ->router %d pkt/%d B, decoys %d, dropped router/upstream %d/%d (+%d/+%d in 60s)",
+					p.stats.ToUpstreamPackets.Load(), p.stats.ToUpstreamBytes.Load(),
+					p.stats.ToRouterPackets.Load(), p.stats.ToRouterBytes.Load(),
+					p.stats.Decoys.Load(), rd, ud,
+					rd-lastRouterDropped, ud-lastUpstreamDropped)
+				lastRouterDropped, lastUpstreamDropped = rd, ud
+			}
 		}
 	}
 }
