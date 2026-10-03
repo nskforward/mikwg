@@ -1,6 +1,7 @@
 # Binaries / build artifacts
 /awg-converter
 /rscgen
+/imagetool
 *.tar
 bin/
 dist/

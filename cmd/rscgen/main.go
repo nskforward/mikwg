@@ -31,6 +31,10 @@ type data struct {
 	WANGW          string
 	ContainerTar   string
 	Container      string
+	Image          string
+	RegistryURL    string
+	RootDir        string
+	TmpDir         string
 	VethIP         string
 	VethIPHost     string
 	GWIP           string
@@ -52,7 +56,9 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 #      and DOWNLOAD both files to your workstation;
 #   2) upload container-<ver>-arm64.npk to Files, reboot;
 #   3) /system/device-mode/update container=yes, reboot;
-#   4) upload {{.ContainerTar}} to Files and awg0.conf to /usb1/awg-config/awg0.conf;
+#   4) put awg0.conf at /usb1/awg-config/awg0.conf;
+#      {{if .Image}}the router pulls the image from {{.RegistryURL}} automatically
+#      (internet access is required);{{else}}upload {{.ContainerTar}} to Files;{{end}}
 #   5) make sure management access survives the changes (LAN port / Winbox-by-MAC);
 #      see docs/safe-operations.md.
 #
@@ -95,12 +101,21 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 }
 # RouterOS refuses to start a container when /ip/dns has no static servers
 # (e.g. DoH-only setup), so an explicit dns= override is required.
-:if ([:len [/container/find name="{{.Container}}"]] = 0) do={
+{{if .Image}}:if ([:len [/container/find name="{{.Container}}"]] = 0) do={
+    # Pull the linux/arm64 image straight from {{.RegistryURL}}. tmpdir is a
+    # global /container/config setting; point it at external storage, because
+    # remote-image staging needs more space than the flash may have.
+    /container/config/set registry-url={{.RegistryURL}} tmpdir={{.TmpDir}}
+    /container/add remote-image={{.Image}} interface=veth-awg root-dir={{.RootDir}} \
+        mountlists=awg-cfg entrypoint=/awg-converter dns={{.ContainerDNS}} \
+        start-on-boot=yes logging=yes name={{.Container}}
+}
+{{else}}:if ([:len [/container/find name="{{.Container}}"]] = 0) do={
     /container/add file={{.ContainerTar}} interface=veth-awg mountlists=awg-cfg \
         entrypoint=/awg-converter dns={{.ContainerDNS}} start-on-boot=yes logging=yes \
         name={{.Container}}
 }
-:if ([:len [/container/find name="{{.Container}}"]] > 0) do={
+{{end}}:if ([:len [/container/find name="{{.Container}}"]] > 0) do={
     :do { /container/start {{.Container}} } on-error={}
 }
 
@@ -245,7 +260,11 @@ func main() {
 	serverIP := flag.String("server-ip", "", "override server IP (default: from conf Endpoint)")
 	wanGW := flag.String("wan-gw", "", "WAN next-hop for the anti-loop route; empty = auto-detect from the main default route (pass the gateway IP, not the interface)")
 	wanList := flag.String("wan-iface-list", "WAN", "interface list used for masquerade")
-	tar := flag.String("tar", "awg-converter-arm64.tar", "container image tar filename on the router")
+	tar := flag.String("tar", "awg-converter-arm64.tar", "container image tar filename on the router (used when -image is empty)")
+	image := flag.String("image", "nskforward/miwg:1.0.0", "container image to pull from the registry; empty = import the tar instead")
+	registry := flag.String("registry", "https://registry-1.docker.io", "registry the router pulls the image from")
+	rootDir := flag.String("root-dir", "usb1/images/awg-converter", "on-router directory where the pulled image is extracted (external storage recommended)")
+	tmpDir := flag.String("tmpdir", "usb1/tmp", "global /container/config tmpdir used while pulling the image (external storage recommended)")
 	container := flag.String("container", "awg-converter", "container name")
 	keepalive := flag.String("keepalive", "12s", "persistent keepalive interval")
 	wgName := flag.String("wg-name", "awg", "WireGuard interface name")
@@ -288,6 +307,10 @@ func main() {
 		WANGW:          *wanGW,
 		ContainerTar:   *tar,
 		Container:      *container,
+		Image:          *image,
+		RegistryURL:    *registry,
+		RootDir:        *rootDir,
+		TmpDir:         *tmpDir,
 		VethIP:         "10.99.0.2/30",
 		VethIPHost:     "10.99.0.2",
 		GWIP:           "10.99.0.1",
