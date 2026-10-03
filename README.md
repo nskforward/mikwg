@@ -51,13 +51,14 @@ AmneziaWG не меняет криптографию WireGuard: все его м
 
 Готовый образ публикуется в Docker Hub как **`nskforward/mikwg`**:
 
-- `nskforward/mikwg:1.0.0` — зафиксированная версия (рекомендуется);
+- `nskforward/mikwg:1.0.1` — зафиксированная версия (рекомендуется);
 - `nskforward/mikwg:latest` — последний релиз.
 
 Роутер забирает его напрямую при установке (`/container/add remote-image=...`),
 загружать tar в Files не нужно. Образ содержит только статический бинарник
-конвертера, слой **несжатый** — именно так его принимает импортёр контейнеров
-RouterOS 7.24.
+конвертера. Слой для реестра **сжат gzip** — `remote-image` распаковывает слой
+при загрузке (RouterOS ждёт `<digest>.tar.gzip`). Оффлайн-tar, наоборот,
+собирается с **несжатым** слоем: импортёр `file=` сжатый не принимает.
 
 Для оффлайн-установки (или своих сборок) tar можно собрать локально — без
 Docker-демона, тем же in-process сборщиком, что формирует публикуемый образ:
@@ -72,10 +73,10 @@ Docker-образ для локальной проверки.
 `rscgen` читает **реальный** `awg0.conf` (вместе с секретами) и пишет скрипт
 развёртывания:
 ```bash
-go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.0 -out routeros.generated.rsc
+go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.1 -out routeros.generated.rsc
 ```
 Полезные флаги: `-image` (образ из Docker Hub; по умолчанию
-`nskforward/mikwg:1.0.0`; пустая строка + `-tar` включает оффлайн-режим),
+`nskforward/mikwg:1.0.1`; пустая строка + `-tar` включает оффлайн-режим),
 `-addr-list` (умолч. `to_vpn_list`), `-rt-table` (умолч.
 `to_vpn_table`), `-conn-mark` (умолч. `to_vpn_mark`), `-wan-iface-list` (умолч.
 `WAN`), `-wan-gw` (next-hop для антилуп-маршрута; по умолчанию определяется

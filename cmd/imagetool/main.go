@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -54,11 +55,6 @@ func main() {
 		log.Fatalf("read binary: %v", err)
 	}
 
-	img, err := buildImage(data, *arch, *entrypoint, primary)
-	if err != nil {
-		log.Fatalf("build image: %v", err)
-	}
-
 	// Registry the image belongs to, without a tag.
 	repoRef, err := name.NewRepository(*image)
 	if err != nil {
@@ -66,6 +62,13 @@ func main() {
 	}
 
 	if *out != "" {
+		// The offline tar is imported with /container/add file=, whose importer
+		// only accepts an uncompressed rootfs layer. A gzip layer fails with
+		// "error getting layer file / failed to load next entry".
+		img, err := buildImage(data, *arch, *entrypoint, primary, false)
+		if err != nil {
+			log.Fatalf("build image: %v", err)
+		}
 		ref, err := name.NewTag(fmt.Sprintf("%s:%s", repoRef.Name(), primary))
 		if err != nil {
 			log.Fatalf("ref: %v", err)
@@ -73,10 +76,18 @@ func main() {
 		if err := tarball.WriteToFile(*out, ref, img); err != nil {
 			log.Fatalf("write tar: %v", err)
 		}
-		log.Printf("wrote %s (arch=%s, entrypoint=%s, tag=%s)", *out, *arch, *entrypoint, primary)
+		log.Printf("wrote %s (arch=%s, layer=uncompressed, entrypoint=%s, tag=%s)", *out, *arch, *entrypoint, primary)
 	}
 
 	if *push {
+		// The remote-image path pulls through the registry and always
+		// decompresses the layer (RouterOS logs "<digest>.tar.gzip"), so the
+		// pushed layer MUST be gzip compressed. A plain layer fails with
+		// "download/extract error: extract layer failed".
+		img, err := buildImage(data, *arch, *entrypoint, primary, true)
+		if err != nil {
+			log.Fatalf("build image: %v", err)
+		}
 		opts := []remote.Option{remote.WithAuthFromKeychain(authn.DefaultKeychain)}
 		if user, pass := os.Getenv("DOCKER_USERNAME"), os.Getenv("DOCKER_PASSWORD"); user != "" && pass != "" {
 			opts = []remote.Option{remote.WithAuth(&authn.Basic{Username: user, Password: pass})}
@@ -91,16 +102,19 @@ func main() {
 			if err := remote.Write(tagRef, img, opts...); err != nil {
 				log.Fatalf("push %s: %v", tagRef.Name(), err)
 			}
-			log.Printf("pushed %s (arch=%s, tag=%s)", tagRef.Name(), *arch, t)
+			log.Printf("pushed %s (arch=%s, layer=gzip, tag=%s)", tagRef.Name(), *arch, t)
 		}
 	}
 }
 
-// buildImage assembles a single-layer image containing just the binary. The
-// layer is uncompressed on purpose: RouterOS' container importer cannot read
-// gzip-compressed layers ("error getting layer file / failed to load next
-// entry"), and the remote-image path is expected to be equally strict.
-func buildImage(data []byte, arch, entrypoint, version string) (v1.Image, error) {
+// buildImage assembles a single-layer image containing just the binary.
+//
+// The layer's compression depends on the consumer:
+//   - compress=false → uncompressed OCI layer, for the docker-archive tar that
+//     RouterOS imports via /container/add file=;
+//   - compress=true  → gzip-compressed Docker layer, for the registry, because
+//     remote-image always decompresses the layer on pull.
+func buildImage(data []byte, arch, entrypoint, version string, compress bool) (v1.Image, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	hdr := &tar.Header{
@@ -120,7 +134,20 @@ func buildImage(data []byte, arch, entrypoint, version string) (v1.Image, error)
 		return nil, err
 	}
 
-	layer := static.NewLayer(buf.Bytes(), types.OCIUncompressedLayer)
+	var (
+		layer v1.Layer
+		err   error
+	)
+	if compress {
+		layer, err = tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		layer = static.NewLayer(buf.Bytes(), types.OCIUncompressedLayer)
+	}
 
 	img, err := mutate.AppendLayers(empty.Image, layer)
 	if err != nil {

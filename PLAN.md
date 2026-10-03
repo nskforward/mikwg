@@ -21,7 +21,7 @@
 | 1. Спецификация протокола | ✅ выполнено | [`docs/protocol-notes.md`](docs/protocol-notes.md). **Главный риск снят:** MAC1/MAC2 считаются над каноническим WG-сообщением до шифрования заголовка ⇒ пересчёт MAC не нужен |
 | 2. Конвертер | ✅ выполнено | `internal/awg`, `internal/config`, `internal/proxy`, `cmd/awg-converter`. `go vet`/`gofmt` чисто, тесты (включая сквозной UDP round-trip) зелёные |
 | 3. Локальный интероп-стенд | 🟡 частично | вместо docker-стенда — in-process UDP round-trip тест (`internal/proxy/proxy_test.go`); боевой интероп с реальным сервером проверяем на роутере (Этап 5) |
-| 4. Образ + rscgen | ✅ выполнено | `Dockerfile`, `build.sh`, `build-nodocker.sh`, `cmd/imagetool` (tar + **push в Docker Hub**), `cmd/rscgen` (registry-режим `-image` и оффлайн `-tar`), `.github/workflows/release.yml`. Образ публикуется как `nskforward/mikwg`; tar — оффлайн-опция. **Важно:** tar собирается с **несжатым** rootfs-слоем (`imagetool` → `static.NewLayer(..., OCIUncompressedLayer)`), иначе RouterOS 7.24 не импортирует образ (`error getting layer file / failed to load next entry`); тот же несжатый слой пушится в реестр для `remote-image` |
+| 4. Образ + rscgen | ✅ выполнено | `Dockerfile`, `build.sh`, `build-nodocker.sh`, `cmd/imagetool` (tar + **push в Docker Hub**), `cmd/rscgen` (registry-режим `-image` и оффлайн `-tar`), `.github/workflows/release.yml`. Образ публикуется как `nskforward/mikwg`; tar — оффлайн-опция. **Важно:** tar собирается с **несжатым** rootfs-слоем (`imagetool` → `static.NewLayer(..., OCIUncompressedLayer)`), иначе RouterOS 7.24 не импортирует образ (`error getting layer file / failed to load next entry`); тот же образ для реестра пушится с **gzip-слоем** (remote-image распаковывает слой при загрузке) |
 | 5. Настройка RouterOS | 🟢 развёрнуто, data-path работает | объекты на роутере подняты (veth/bridge/container/WG/mangle/routes/watchdog), `to_vpn_list`/`to_vpn_table` переиспользованы, дефолт не тронут. Блокер data-path закрыт (см. «✅ Блокер закрыт»): исправлен антилуп-маршрут и добавлен srcnat в туннель; проверено `ping 10.8.2.1` и `fetch` через туннель. Осталось: подтверждение с LAN-клиента и приёмка (Этап 6) |
 | 6. Приёмка | ⬜ не начато | после Этапа 5 |
 | 7. README | 🟡 частично | README/docs актуализированы под «без сбросов» и выборочную маршрутизацию; цифры производительности — после Этапа 6 |
@@ -533,14 +533,18 @@ WAN — исключает ручные опечатки. Переиспольз
 `/container/add remote-image=`, а не через загрузку tar в Files.
 
 - **`cmd/imagetool`:** добавлен режим `-push` (флаги `-image` — репозиторий,
-  `-tag`/`-tags` — теги, `-out` — одновременно писать tar). Образ тот же, что и
-  раньше: один **несжатый** слой (`OCIUncompressedLayer`), `entrypoint`,
-  `user 65534`, детерминированный `created`, OCI-метки. Пуш — через
-  `remote.Write` (`go-containerregistry`), auth из `DOCKER_USERNAME`/
-  `DOCKER_PASSWORD` или `docker login`; Docker-демон не нужен. Тест
-  `cmd/imagetool/main_test.go` пушит в in-process OCI-registry и читает образ
-  обратно — валидирует форму без Docker и без сети.
-- **`cmd/rscgen`:** новый флаг `-image` (по умолчанию `nskforward/mikwg:1.0.0`)
+  `-tag`/`-tags` — теги, `-out` — одновременно писать tar). Образ собирается в
+  двух видах: **несжатый** слой (`OCIUncompressedLayer`) — для оффлайн-tar
+  (`file=`), и **gzip**-слой (`DockerLayer`) — для реестра. Это выяснилось
+  эмпирически на роутере: `remote-image` тянет blob как `<digest>.tar.gzip` и
+  всегда распаковывает его, поэтому несжатый слой падает с `download/extract
+  error: extract layer failed`; при этом `file=` сжатый слой не принимает.
+  `entrypoint`, `user 65534`, детерминированный `created`, OCI-метки. Пуш —
+  через `remote.Write` (`go-containerregistry`), auth из `DOCKER_USERNAME`/
+  `DOCKER_PASSWORD` или `docker login`; Docker-демон не нужен. Тесты
+  `cmd/imagetool/main_test.go` проверяют оба вида и пуш в in-process
+  OCI-registry — без Docker и без сети.
+- **`cmd/rscgen`:** новый флаг `-image` (по умолчанию `nskforward/mikwg:1.0.1`)
   включает registry-режим: `/container/config/set registry-url=... tmpdir=...` +
   `/container/add remote-image=... root-dir=...`. Пустой `-image` сохраняет
   оффлайн-путь через `file=<tar>`. Флаги `-registry`, `-root-dir`, `-tmpdir`.
