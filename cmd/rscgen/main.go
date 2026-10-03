@@ -142,11 +142,11 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
     # remote-image staging needs more space than the flash may have.
     /container/config/set registry-url={{.RegistryURL}} tmpdir={{.TmpDir}}
     /container/add remote-image={{.Image}} interface=veth-awg root-dir={{.RootDir}} \
-        {{if .EnvMode}}envs={{.EnvList}}{{else}}mountlists=awg-cfg{{end}} entrypoint=/awg-converter dns={{.ContainerDNS}} \
+        {{if .EnvMode}}envlists={{.EnvList}}{{else}}mountlists=awg-cfg{{end}} entrypoint=/awg-converter dns={{.ContainerDNS}} \
         start-on-boot=yes logging=yes name={{.Container}}
 }
 {{else}}:if ([:len [/container/find name="{{.Container}}"]] = 0) do={
-    /container/add file={{.ContainerTar}} interface=veth-awg {{if .EnvMode}}envs={{.EnvList}}{{else}}mountlists=awg-cfg{{end}} \
+    /container/add file={{.ContainerTar}} interface=veth-awg {{if .EnvMode}}envlists={{.EnvList}}{{else}}mountlists=awg-cfg{{end}} \
         entrypoint=/awg-converter dns={{.ContainerDNS}} start-on-boot=yes logging=yes \
         name={{.Container}}
 }
@@ -161,7 +161,7 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 {{end}}{{if .EnvMode}}    # Migrate an existing container to environment-variable config and detach
     # the legacy read-only awg0.conf mount, if any.
     :do { /container/stop {{.Container}} } on-error={}
-    /container/set [find name="{{.Container}}"] envs={{.EnvList}} mountlists=""
+    /container/set [find name="{{.Container}}"] envlists={{.EnvList}} mountlists=""
     :do { /container/mounts/remove [find where list="awg-cfg"] } on-error={}
 {{end}}    :do { /container/start {{.Container}} } on-error={}
 }

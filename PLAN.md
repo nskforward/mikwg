@@ -800,7 +800,7 @@ golden-тесты против `golang.org/x/crypto/chacha20` на случай�
   `LISTEN`/`JITTER`/`VERBOSE` читаются из env; в лог добавлен источник конфига
   (`config source: env` / `file` / `file+env`).
 - **`cmd/rscgen`**: по умолчанию генерирует список `/container/envs` `awg-env`
-  (UPSTREAM, S1–S4, H1–H4, JC/JMIN/JMAX, HPK, I1–I5) и вешает `envs=awg-env` на
+  (UPSTREAM, S1–S4, H1–H4, JC/JMIN/JMAX, HPK, I1–I5) и вешает `envlists=awg-env` на
   контейнер; mount `awg0.conf` не создаётся. При импорте в существующий
   контейнер скрипт сначала при необходимости обновляет `remote-image` +
   `/container/update`, затем переключает контейнер на env-режим и снимает

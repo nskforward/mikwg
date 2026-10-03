@@ -92,7 +92,7 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.1.1 -out routeros.
 
 `rscgen` по умолчанию выносит параметры обфускации в environment-переменные
 контейнера (`/container/envs`): в генерируемом скрипте создаётся список
-`awg-env` (из тех же полей `awg0.conf`), а контейнер запускается с `envs=awg-env`.
+`awg-env` (из тех же полей `awg0.conf`), а контейнер запускается с `envlists=awg-env`.
 Файл `awg0.conf` на роутер копировать не нужно, монтирование не создаётся.
 
 > ⚠️ Антилуп-маршрут до IP сервера должен указывать на **реальный next-hop**
@@ -141,7 +141,7 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.1.1 -out routeros.
   read-only);
 - настраивает `/container/config` (`registry-url`, `tmpdir`) и по `remote-image`
   скачивает образ `nskforward/mikwg` из Docker Hub, затем запускает контейнер
-  `awg-converter` с `envs=awg-env` (при оффлайн-режиме — импортирует локальный
+  `awg-converter` с `envlists=awg-env` (при оффлайн-режиме — импортирует локальный
   tar). Если контейнер уже существует и тег образа отличается, скрипт сам
   переключит `remote-image` и выполнит `/container/update`;
 - поднимает WireGuard с endpoint на контейнер (приватный ключ остаётся в RouterOS);

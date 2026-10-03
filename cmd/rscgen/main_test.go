@@ -40,7 +40,7 @@ func TestTemplateEnvMode(t *testing.T) {
 		`:do { /container/envs/remove [find where list="awg-env"] } on-error={}`,
 		`/container/envs/add list=awg-env key="S4" value="12"`,
 		`/container/envs/add list=awg-env key="I1" value="<r 226>"`,
-		`envs=awg-env`,
+		`envlists=awg-env`,
 		`mountlists=""`,
 	} {
 		if !strings.Contains(out, want) {
