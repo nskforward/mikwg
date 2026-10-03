@@ -55,7 +55,7 @@ AmneziaWG не меняет криптографию WireGuard: все его м
 
 Готовый образ публикуется в Docker Hub как **`nskforward/mikwg`**:
 
-- `nskforward/mikwg:1.1.1` — зафиксированная версия (рекомендуется);
+- `nskforward/mikwg:1.1.2` — зафиксированная версия (рекомендуется);
 - `nskforward/mikwg:latest` — последний релиз.
 
 Роутер забирает его напрямую при установке (`/container/add remote-image=...`),
@@ -77,10 +77,10 @@ Docker-образ для локальной проверки.
 `rscgen` читает **реальный** `awg0.conf` (вместе с секретами) и пишет скрипт
 развёртывания:
 ```bash
-go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.1.1 -out routeros.generated.rsc
+go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.1.2 -out routeros.generated.rsc
 ```
 Полезные флаги: `-image` (образ из Docker Hub; по умолчанию
-`nskforward/mikwg:1.1.1`; пустая строка + `-tar` включает оффлайн-режим),
+`nskforward/mikwg:1.1.2`; пустая строка + `-tar` включает оффлайн-режим),
 `-addr-list` (умолч. `to_vpn_list`), `-rt-table` (умолч.
 `to_vpn_table`), `-conn-mark` (умолч. `to_vpn_mark`), `-wan-iface-list` (умолч.
 `WAN`), `-wan-gw` (next-hop для антилуп-маршрута; по умолчанию определяется
@@ -213,13 +213,13 @@ S/H/HPK/Jc/I1 без секретов.
 
 1. Переключите `remote-image` на новый тег и обновите образ:
    ```rsc
-   /container/set awg-converter remote-image=nskforward/mikwg:1.1.1
+   /container/set awg-converter remote-image=nskforward/mikwg:1.1.2
    /container/update awg-converter
    ```
    `/container/update` перекачивает и распаковывает образ, заменяя старый. Если
    `update` не сработал — `/container/remove awg-converter` и повторный
    `/import file=routeros.generated.rsc`, сгенерированный с новым `-image`.
-2. Сгенерированный скрипт 1.1.1 при импорте сам сначала обновляет образ, а затем
+2. Сгенерированный скрипт 1.1.2 при импорте сам сначала обновляет образ, а затем
    переключает контейнер на env-режим (снимая старый mount), поэтому переход с
    версий ≤ 1.0.1 делается одним импортом.
 

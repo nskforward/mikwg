@@ -7,7 +7,7 @@
 set -euo pipefail
 
 GO="${GO:-/usr/local/go/bin/go}"
-VERSION="${VERSION:-1.1.1}"
+VERSION="${VERSION:-1.1.2}"
 IMAGE="${IMAGE:-nskforward/mikwg}"
 TAR="${TAR:-awg-converter-arm64.tar}"
 

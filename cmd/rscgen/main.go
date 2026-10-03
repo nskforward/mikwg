@@ -308,7 +308,7 @@ func main() {
 	wanGW := flag.String("wan-gw", "", "WAN next-hop for the anti-loop route; empty = auto-detect from the main default route (pass the gateway IP, not the interface)")
 	wanList := flag.String("wan-iface-list", "WAN", "interface list used for masquerade")
 	tar := flag.String("tar", "awg-converter-arm64.tar", "container image tar filename on the router (used when -image is empty)")
-	image := flag.String("image", "nskforward/mikwg:1.1.1", "container image to pull from the registry; empty = import the tar instead")
+	image := flag.String("image", "nskforward/mikwg:1.1.2", "container image to pull from the registry; empty = import the tar instead")
 	registry := flag.String("registry", "https://registry-1.docker.io", "registry the router pulls the image from")
 	rootDir := flag.String("root-dir", "usb1/images/awg-converter", "on-router directory where the pulled image is extracted (external storage recommended)")
 	tmpDir := flag.String("tmpdir", "usb1/tmp", "global /container/config tmpdir used while pulling the image (external storage recommended)")
