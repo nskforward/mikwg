@@ -250,7 +250,8 @@ make push-release   # то же + тег latest
 Публикация образа автоматизирована: пуш тега `vX.Y.Z` запускает GitHub Actions
 (`.github/workflows/release.yml`), который прогоняет тесты, пушит
 `nskforward/miwg:X.Y.Z` и `:latest` и прикладывает `awg-converter-arm64.tar` к
-GitHub Release. Нужны секреты репозитория `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`.
+GitHub Release. Нужны секреты репозитория `DOCKER_USERNAME`/`DOCKER_PASSWORD`
+(пароль — Docker Hub access token с правом push).
 Локально `make push` использует `DOCKER_USERNAME`/`DOCKER_PASSWORD` или
 `docker login`.
 

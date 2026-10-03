@@ -546,8 +546,8 @@ WAN — исключает ручные опечатки. Переиспольз
   оффлайн-путь через `file=<tar>`. Флаги `-registry`, `-root-dir`, `-tmpdir`.
 - **CI:** `.github/workflows/release.yml` на тег `v*` (и `workflow_dispatch`):
   `make lint test` → `make build` → `imagetool -push` тегов `X.Y.Z` и `latest` +
-  `awg-converter-arm64.tar` → GitHub Release. Секреты `DOCKERHUB_USERNAME`/
-  `DOCKERHUB_TOKEN`.
+  `awg-converter-arm64.tar` → GitHub Release. Секреты `DOCKER_USERNAME`/
+  `DOCKER_PASSWORD`.
 - **Makefile:** `push` / `push-release`; `REGISTRY ?= docker.io/nskforward/miwg`.
 
 **Критерий выхода (обновлено):** образ `nskforward/miwg` собирается и пушится без
