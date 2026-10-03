@@ -1,7 +1,7 @@
 # mikwg — план реализации AmneziaWG 3.1-клиента на RouterOS 7.24+ (kernel WireGuard + container-конвертер)
 
-> Рабочий план проекта. Статус — в разделе «Статус реализации» ниже: этапы 0–4
-> выполнены. **Этап 5 развёрнут на роутере, блокер data-path закрыт** (см.
+> Рабочий план проекта. Статус — в разделе «Статус реализации» ниже: этапы 0–5 и 7
+> выполнены, этап 6 (приёмка) начат. **Этап 5 развёрнут на роутере, блокер data-path закрыт** (см.
 > «✅ Блокер закрыт: сессия 2026-10-03 (продолжение)»). Причина была не в
 > транспорте AmneziaWG, а в трёх ошибках развёртывания: антилуп-маршрут на
 > интерфейс вместо next-hop (ARP публичного IP в LAN), отсутствие srcnat в
@@ -9,7 +9,10 @@
 > маршрута (ответы сервера уходили обратно в туннель). Все три исправлены на
 > роутере и в `rscgen`. **Подход изменён:** mikwg больше не выполняет factory reset —
 > роутер готовит пользователь (см. README), маршрутизация в туннель выборочная,
-> через существующие `to_vpn_list` / `to_vpn_table`.
+> через существующие `to_vpn_list` / `to_vpn_table`. **Установка — из Docker Hub:**
+> образ `nskforward/mikwg` (текущий релиз `1.0.1`) собирается без Docker-демона и
+> публикуется GitHub Actions; роутер забирает его через `/container/add
+> remote-image=`, загрузка tar в Files не требуется.
 
 ---
 
@@ -22,9 +25,9 @@
 | 2. Конвертер | ✅ выполнено | `internal/awg`, `internal/config`, `internal/proxy`, `cmd/awg-converter`. `go vet`/`gofmt` чисто, тесты (включая сквозной UDP round-trip) зелёные |
 | 3. Локальный интероп-стенд | 🟡 частично | вместо docker-стенда — in-process UDP round-trip тест (`internal/proxy/proxy_test.go`); боевой интероп с реальным сервером проверяем на роутере (Этап 5) |
 | 4. Образ + rscgen | ✅ выполнено | `Dockerfile`, `build.sh`, `build-nodocker.sh`, `cmd/imagetool` (tar + **push в Docker Hub**), `cmd/rscgen` (registry-режим `-image` и оффлайн `-tar`), `.github/workflows/release.yml`. Образ публикуется как `nskforward/mikwg`; tar — оффлайн-опция. **Важно:** tar собирается с **несжатым** rootfs-слоем (`imagetool` → `static.NewLayer(..., OCIUncompressedLayer)`), иначе RouterOS 7.24 не импортирует образ (`error getting layer file / failed to load next entry`); тот же образ для реестра пушится с **gzip-слоем** (remote-image распаковывает слой при загрузке) |
-| 5. Настройка RouterOS | 🟢 развёрнуто, data-path работает | объекты на роутере подняты (veth/bridge/container/WG/mangle/routes/watchdog), `to_vpn_list`/`to_vpn_table` переиспользованы, дефолт не тронут. Блокер data-path закрыт (см. «✅ Блокер закрыт»): исправлен антилуп-маршрут и добавлен srcnat в туннель; проверено `ping 10.8.2.1` и `fetch` через туннель. Осталось: подтверждение с LAN-клиента и приёмка (Этап 6) |
-| 6. Приёмка | ⬜ не начато | после Этапа 5 |
-| 7. README | 🟡 частично | README/docs актуализированы под «без сбросов» и выборочную маршрутизацию; цифры производительности — после Этапа 6 |
+| 5. Настройка RouterOS | 🟢 развёрнуто, data-path работает | объекты на роутере подняты (veth/bridge/container/WG/mangle/routes/watchdog), `to_vpn_list`/`to_vpn_table` переиспользованы, дефолт не тронут. Блокер data-path закрыт. **2026-10-03: контейнер мигрирован со старого tar на `remote-image=nskforward/mikwg:1.0.1`** (Docker Hub pull + extract — работает), контейнер running, handshake свежий, `fetch` адреса из `to_vpn_list` — HTTP 200. Осталось: приёмка (Этап 6) |
+| 6. Приёмка | 🟡 начато | частично: рукопожатие, data-path (TCP через туннель) и переустановка из реестра проверены на роутере. Осталось: пропускная способность/CPU, pcap-форма, 24 ч стабильности |
+| 7. README | ✅ выполнено | README/docs актуализированы: установка из Docker Hub, обновление, проверка, устранение неполадок (в т.ч. gzip-слой для `remote-image`); цифры производительности — после Этапа 6 |
 
 **Инвентарь (уже готово):** рабочий конвертер + тесты; собранный arm64-тар;
 генератор RouterOS-скрипта `rscgen` (идемпотентный, переиспользует
@@ -67,10 +70,10 @@
    [`docs/safe-operations.md`](docs/safe-operations.md) (LAN-порт или
    Winbox-by-MAC; при необходимости — Safe Mode Ctrl-X). `run-after-reset` **не
    требуется**, т.к. сброс не выполняется.
-3. **Проверить наличие на роутере** `/usb1/awg-config/awg0.conf` и
-   `awg-converter-arm64.tar` в Files (загрузить, если нет).
+3. **Проверить наличие на роутере** `/usb1/awg-config/awg0.conf` (образ роутер
+   скачает сам из Docker Hub; tar нужен только для оффлайн-установки).
 4. **Сгенерировать скрипт:**
-   `go run ./cmd/rscgen -conf <реальный awg0.conf> -wan-gw <WAN-интерфейс> -out routeros.generated.rsc`
+   `go run ./cmd/rscgen -conf <реальный awg0.conf> -image nskforward/mikwg:1.0.1 -out routeros.generated.rsc`
    (реальный конфиг уже получен; хранится локально вне git). По умолчанию
    используются `to_vpn_list` / `to_vpn_table`; имена переопределяются флагами
    `-addr-list` / `-rt-table`.
@@ -558,9 +561,27 @@ WAN — исключает ручные опечатки. Переиспольз
 Docker-демона; RouterOS 7.24 поднимает контейнер из `remote-image`; tar остаётся
 оффлайн-опцией.
 
+#### Проверка на роутере (2026-10-03)
+
+Миграция прошла на hAP ax³ / RouterOS 7.24.5:
+- `/container/config/set registry-url=https://registry-1.docker.io tmpdir=usb1/tmp`;
+- старый контейнер (`file=`) удалён, добавлен
+  `/container/add remote-image=nskforward/mikwg:1.0.1 interface=veth-awg
+  root-dir=usb1/images/awg-converter mountlists=awg-cfg entrypoint=/awg-converter
+  dns=1.1.1.1 start-on-boot=yes logging=yes name=awg-converter`;
+- лог: `downloading and extracting ... arch=arm64` → `download/extract done`,
+  контейнер `running`, `awg-converter 1.0.1`, handshake свежий;
+- `fetch https://core.telegram.org/` (адрес из `to_vpn_list`) — HTTP 200.
+
+**Найдено эмпирически:** `remote-image` тянет blob как `<digest>.tar.gzip` и
+**всегда** распаковывает его — несжатый слой падает с `download/extract error:
+extract layer failed`. Поэтому для реестра нужен gzip-слой (см. `imagetool`),
+а несжатый — только для оффлайн `file=`. Релиз `1.0.1` исправляет это
+(`application/vnd.docker.image.rootfs.diff.tar.gzip`).
+
 ---
 
-## Этап 5 — Настройка RouterOS (~1–2 ч + приёмка) — 🟡 возобновлён
+## Этап 5 — Настройка RouterOS (~1–2 ч + приёмка) — 🟢 развёрнуто
 
 > ⚠️ **mikwg не сбрасывает роутер.** Подготовка (бэкап, пакет `container`,
 > `device-mode`, загрузка файлов) — на стороне пользователя
@@ -601,13 +622,20 @@ Docker-демона; RouterOS 7.24 поднимает контейнер из `r
 `Endpoint` смонтированного `awg0.conf`. **Синтаксис для RouterOS 7.24.5** (в
 старых версиях иначе: `name=`/`read-only=yes`/`mounts=`; здесь —
 `list=`/`mode=ro`/`mountlists=`). `dns=` обязателен, если в `/ip/dns` нет
-статических серверов (DoH-only — как у нас):
+статических серверов (DoH-only — как у нас). Образ тянется из Docker Hub
+(`remote-image`); для оффлайн-режима — `file=awg-converter-arm64.tar`:
 ```
+/container/config/set registry-url=https://registry-1.docker.io tmpdir=usb1/tmp
 /container/mounts/add list=awg-cfg src=/usb1/awg-config dst=/etc/awg mode=ro
-/container/add file=awg-converter-arm64.tar interface=veth-awg mountlists=awg-cfg \
+/container/add remote-image=nskforward/mikwg:1.0.1 interface=veth-awg \
+    root-dir=usb1/images/awg-converter mountlists=awg-cfg \
     entrypoint=/awg-converter dns=1.1.1.1 start-on-boot=yes logging=yes name=awg-converter
 /container/start awg-converter
 ```
+> `remote-image` распаковывает слой при загрузке, поэтому в реестре образ обязан
+> иметь gzip-слой (см. «Публикация в Docker Hub»); несжатый слой — только для
+> `file=`-импорта оффлайн-tar.
+
 Контроль: `/container/print` → running; лог — строка конфигурации без секретов.
 
 **5.5 WireGuard (ключ только здесь):**
@@ -714,12 +742,14 @@ AmneziaWG 3.1; watchdog и start-on-boot на месте; `to_vpn_list`/`to_vpn_
 
 ---
 
-## Этап 7 — README и финализация (~1 ч) — 🟡 частично
+## Этап 7 — README и финализация (~1 ч) — ✅ выполнено
 
-Актуализировать `README.md` из черновика: реальные цифры, найденные нюансы
-протокола, работоспособные команды. Добавить раздел «Как обновлять параметры
-обфускации» (Amnezia иногда ротирует конфиги: заменить awg0.conf →
-`/container/restart` + обновить peer/rscgen). Тег `v1.0.0`.
+README актуализирован: установка и обновление из Docker Hub, раздел проверки,
+устранение неполадок (в т.ч. требование gzip-слоя для `remote-image` и
+несжатого — для оффлайн-tar), обновление параметров обфускации через
+`awg0.conf` + `/container/restart`. Опубликованы теги `v1.0.0`, `v1.0.1`
+(`latest` → `1.0.1`). Осталось: фактические цифры производительности на роутере
+(Этап 6).
 
 ---
 
