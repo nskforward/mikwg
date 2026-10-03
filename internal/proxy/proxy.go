@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
@@ -36,7 +37,7 @@ type Proxy struct {
 	verbose  bool
 
 	stats  Stats
-	router atomic.Pointer[net.UDPAddr]
+	router atomic.Pointer[netip.AddrPort]
 	local  atomic.Pointer[net.UDPAddr]
 	ready  chan struct{}
 }
@@ -94,17 +95,42 @@ func (p *Proxy) Run(ctx context.Context) error {
 }
 
 func (p *Proxy) routerToUpstream(ctx context.Context, l, up *net.UDPConn) {
-	buf := make([]byte, maxDatagram)
+	// Leave S4 bytes of headroom so a transport datagram can be framed in
+	// place: the kernel WireGuard message is read into buf[S4:] and the padding
+	// prefix is written into buf[:S4] without moving the body.
+	s4 := p.params.S4
+	buf := make([]byte, s4+maxDatagram)
 	for {
-		n, addr, err := l.ReadFromUDP(buf)
+		n, ap, err := l.ReadFromUDPAddrPort(buf[s4:])
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			continue
 		}
-		p.router.Store(addr)
-		pkt := buf[:n]
+		p.setRouter(ap)
+		pkt := buf[s4 : s4+n]
+
+		// Fast path: the overwhelming majority of packets are transport data.
+		if n > 0 && pkt[0] == awg.MsgTransport {
+			out, err := p.params.WrapTransportInPlace(buf, n)
+			if err != nil {
+				p.stats.FromRouterDropped.Add(1)
+				if p.verbose {
+					log.Printf("drop outbound: %v", err)
+				}
+				continue
+			}
+			if _, err := up.Write(out); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
+			}
+			p.stats.ToUpstreamPackets.Add(1)
+			p.stats.ToUpstreamBytes.Add(uint64(len(out)))
+			continue
+		}
 
 		outs, err := p.params.TransformOut(pkt)
 		if err != nil {
@@ -151,11 +177,11 @@ func (p *Proxy) upstreamToRouter(ctx context.Context, up, l *net.UDPConn) {
 			}
 			continue
 		}
-		addr := p.router.Load()
-		if addr == nil {
+		ap := p.router.Load()
+		if ap == nil {
 			continue
 		}
-		if _, err := l.WriteToUDP(canonical, addr); err != nil {
+		if _, err := l.WriteToUDPAddrPort(canonical, *ap); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -164,6 +190,16 @@ func (p *Proxy) upstreamToRouter(ctx context.Context, up, l *net.UDPConn) {
 		p.stats.ToRouterPackets.Add(1)
 		p.stats.ToRouterBytes.Add(uint64(len(canonical)))
 	}
+}
+
+// setRouter records the last source address seen from the router (roaming-safe)
+// without allocating on every packet: it only stores a new pointer when the
+// address actually changes.
+func (p *Proxy) setRouter(ap netip.AddrPort) {
+	if cur := p.router.Load(); cur != nil && *cur == ap {
+		return
+	}
+	p.router.Store(&ap)
 }
 
 func (p *Proxy) report(ctx context.Context) {

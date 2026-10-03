@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func testParams(t *testing.T) *Params {
+func testParams(t testing.TB) *Params {
 	t.Helper()
 	i1, err := ParseObfChain("<r 226>")
 	if err != nil {
@@ -83,6 +83,37 @@ func TestRoundTripTransport(t *testing.T) {
 	}
 	if !bytes.Equal(got, in) {
 		t.Fatalf("round-trip mismatch")
+	}
+}
+
+// TestWrapTransportInPlace covers the proxy's outbound fast path: the canonical
+// message sits at buf[S4:] and is framed in place, reusing the caller's buffer.
+func TestWrapTransportInPlace(t *testing.T) {
+	p := testParams(t)
+	in := canonical(MsgTransport, 200)
+	buf := make([]byte, p.S4+len(in))
+	copy(buf[p.S4:], in)
+
+	out, err := p.WrapTransportInPlace(buf, len(in))
+	if err != nil {
+		t.Fatalf("WrapTransportInPlace: %v", err)
+	}
+	if len(out) != p.S4+len(in) {
+		t.Fatalf("datagram size %d, want %d", len(out), p.S4+len(in))
+	}
+	if &out[0] != &buf[0] {
+		t.Fatal("WrapTransportInPlace must reuse the caller's buffer (zero-copy)")
+	}
+	got, ok := p.TransformIn(out)
+	if !ok {
+		t.Fatal("TransformIn rejected the in-place transport datagram")
+	}
+	if !bytes.Equal(got, in) {
+		t.Fatalf("round-trip mismatch\n got %x\nwant %x", got, in)
+	}
+
+	if _, err := p.WrapTransportInPlace(make([]byte, p.S4+8), 8); err == nil {
+		t.Fatal("short transport message must be rejected")
 	}
 }
 

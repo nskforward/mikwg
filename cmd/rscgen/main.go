@@ -160,48 +160,46 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
     /ip/firewall/nat/add chain=srcnat action=masquerade out-interface={{.WGName}} \
         comment="mikwg tunnel snat"
 }
-# Never mark traffic toward the server itself (loop protection). Keep this rule
-# ABOVE the marking rules below.
-:if ([:len [/ip/firewall/mangle find comment="mikwg: anti-loop"]] = 0) do={
-    /ip/firewall/mangle/add chain=prerouting dst-address={{.ServerIP}}/32 action=accept \
-        passthrough=no comment="mikwg: anti-loop"
+# --- Firewall: selective-routing mangle, rebuilt in a fixed order ---------
+# Every rule whose comment starts with "mikwg:" is ours. Drop and re-add them on
+# every import so the evaluation order is deterministic (the final state is
+# idempotent); this is also how an older layout gets migrated. Order matters for
+# the hot download direction: traffic arriving FROM the tunnel must leave mangle
+# in the very first rule, and the address-list lookup must only ever run for NEW
+# connections; established packets are steered by their connection-mark alone.
+:foreach r in=[/ip/firewall/mangle/find where comment~"^mikwg:"] do={
+    /ip/firewall/mangle/remove $r
 }
-# Mark new connections to listed destinations, then route all their packets.
-:if ([:len [/ip/firewall/mangle find comment="mikwg: mark connection"]] = 0) do={
-    /ip/firewall/mangle/add chain=prerouting dst-address-list={{.AddrList}} connection-state=new \
-        action=mark-connection new-connection-mark={{.ConnMark}} passthrough=yes \
-        comment="mikwg: mark connection"
-}
-# Reply traffic coming back FROM the tunnel must reach the LAN via the main
-# table. A reply still carries {{.ConnMark}}, so without this exception the
-# mark-routing rule below would route it straight back into the tunnel (reply
-# loop): the TCP handshake completes and replies show up in conntrack, but no
-# data ever reaches the client. Inserted before the mark-routing rule.
-:if ([:len [/ip/firewall/mangle find comment="mikwg: vpn return"]] = 0) do={
-    :if ([:len [/ip/firewall/mangle find comment="mikwg: route to vpn"]] > 0) do={
-        /ip/firewall/mangle/add place-before=[/ip/firewall/mangle find comment="mikwg: route to vpn"] \
-            chain=prerouting in-interface={{.WGName}} action=accept passthrough=no \
-            comment="mikwg: vpn return"
-    } else={
-        /ip/firewall/mangle/add chain=prerouting in-interface={{.WGName}} action=accept \
-            passthrough=no comment="mikwg: vpn return"
-    }
-}
-:if ([:len [/ip/firewall/mangle find comment="mikwg: route to vpn"]] = 0) do={
-    /ip/firewall/mangle/add chain=prerouting connection-mark={{.ConnMark}} action=mark-routing \
-        new-routing-mark={{.RTTable}} passthrough=no comment="mikwg: route to vpn"
-}
-# Router-originated traffic (e.g. its own DNS queries) to listed destinations.
-:if ([:len [/ip/firewall/mangle find comment="mikwg: router via vpn"]] = 0) do={
-    /ip/firewall/mangle/add chain=output dst-address-list={{.AddrList}} action=mark-routing \
-        new-routing-mark={{.RTTable}} passthrough=no comment="mikwg: router via vpn"
-}
+# 1. Return traffic coming back FROM the tunnel must reach the LAN via the main
+#    table. A reply still carries {{.ConnMark}}, so without this exception the
+#    mark-routing rule below would route it straight back into the tunnel (reply
+#    loop): the TCP handshake completes and replies show up in conntrack, but no
+#    data ever reaches the client.
+/ip/firewall/mangle/add chain=prerouting in-interface={{.WGName}} action=accept \
+    passthrough=no comment="mikwg: vpn return"
+# 2. Never mark traffic toward the server itself (loop protection).
+/ip/firewall/mangle/add chain=prerouting dst-address={{.ServerIP}}/32 action=accept \
+    passthrough=no comment="mikwg: anti-loop"
+# 3. Inspect the destination list and mark the connection only when it is NEW.
+/ip/firewall/mangle/add chain=prerouting connection-state=new dst-address-list={{.AddrList}} \
+    action=mark-connection new-connection-mark={{.ConnMark}} passthrough=yes \
+    comment="mikwg: mark connection"
+# 4. Steer every packet of a marked connection by its mark alone (cheap).
+/ip/firewall/mangle/add chain=prerouting connection-mark={{.ConnMark}} action=mark-routing \
+    new-routing-mark={{.RTTable}} passthrough=no comment="mikwg: route to vpn"
+# Router-originated traffic (e.g. its own DNS queries): the same connection-mark
+# trick in the output chain, plus its own anti-loop guard.
+/ip/firewall/mangle/add chain=output dst-address={{.ServerIP}}/32 action=accept \
+    passthrough=no comment="mikwg: anti-loop out"
+/ip/firewall/mangle/add chain=output connection-state=new dst-address-list={{.AddrList}} \
+    action=mark-connection new-connection-mark={{.ConnMark}} passthrough=yes \
+    comment="mikwg: mark connection out"
+/ip/firewall/mangle/add chain=output connection-mark={{.ConnMark}} action=mark-routing \
+    new-routing-mark={{.RTTable}} passthrough=no comment="mikwg: router via vpn"
 # Clamp TCP MSS for tunnel-bound flows so LAN clients never emit segments larger
 # than the tunnel MTU (avoids an MTU black hole for forwarded TCP).
-:if ([:len [/ip/firewall/mangle find comment="mikwg: mss clamp"]] = 0) do={
-    /ip/firewall/mangle/add chain=forward protocol=tcp tcp-flags=syn connection-mark={{.ConnMark}} \
-        action=change-mss new-mss=1360 comment="mikwg: mss clamp"
-}
+/ip/firewall/mangle/add chain=forward protocol=tcp tcp-flags=syn connection-mark={{.ConnMark}} \
+    action=change-mss new-mss=1360 comment="mikwg: mss clamp"
 # FastTrack bypasses mangle and would break policy routing. Ensure every
 # fasttrack rule excludes our connection mark (idempotent: a rule that already
 # carries connection-mark=!{{.ConnMark}} is left untouched).

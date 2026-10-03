@@ -131,9 +131,11 @@ LAN-клиенты при этом получали `Network is unreachable` (IC
 при этом работал, т.к. доставлялся локально, минуя forward.
 
 Исправление: правило `chain=prerouting in-interface=awg action=accept passthrough=no
-comment="mikwg: vpn return"`, вставленное **перед** `mikwg: route to vpn` (в
-`rscgen` — через `place-before`). Дополнительно добавлен MSS-clamp
-(`change-mss new-mss=1360` для `to_vpn_mark`-SYN).
+comment="mikwg: vpn return"`. Позже перенесено **в начало** prerouting-mikwg-правил
+(см. 5.8): скрипт на каждом импорте пересобирает все правила `mikwg:` в
+детерминированном порядке, поэтому `place-before` больше не используется.
+Дополнительно добавлен MSS-clamp (`change-mss new-mss=1360` для
+`to_vpn_mark`-SYN).
 
 **Проверено после исправлений:** `last-handshake` обновляется; `ping 10.8.2.1`
 (внутренний адрес сервера) — 3/3, ~5 мс; `tool fetch http://1.0.0.1/` через
@@ -609,15 +611,26 @@ WAN — исключает ручные опечатки. Переиспольз
 разобраться **до** импорта (скрипт добавляет свой дефолт только при отсутствии
 правила `mikwg vpn`).
 
-**5.8 Mangle-маркировка (создаётся скриптом, порядок важен):**
+**5.8 Mangle-маркировка (создаётся скриптом; порядок важен для производительности):**
 ```
+# prerouting, в порядке применения:
+/ip/firewall/mangle/add chain=prerouting in-interface=awg action=accept passthrough=no comment="mikwg: vpn return"
 /ip/firewall/mangle/add chain=prerouting dst-address={VPN_SERVER_IP}/32 action=accept passthrough=no comment="mikwg: anti-loop"
-/ip/firewall/mangle/add chain=prerouting dst-address-list=to_vpn_list connection-state=new action=mark-connection new-connection-mark=to_vpn_mark passthrough=yes comment="mikwg: mark connection"
+/ip/firewall/mangle/add chain=prerouting connection-state=new dst-address-list=to_vpn_list action=mark-connection new-connection-mark=to_vpn_mark passthrough=yes comment="mikwg: mark connection"
 /ip/firewall/mangle/add chain=prerouting connection-mark=to_vpn_mark action=mark-routing new-routing-mark=to_vpn_table passthrough=no comment="mikwg: route to vpn"
-/ip/firewall/mangle/add chain=output dst-address-list=to_vpn_list action=mark-routing new-routing-mark=to_vpn_table passthrough=no comment="mikwg: router via vpn"
+# output, трафик самого роутера:
+/ip/firewall/mangle/add chain=output dst-address={VPN_SERVER_IP}/32 action=accept passthrough=no comment="mikwg: anti-loop out"
+/ip/firewall/mangle/add chain=output connection-state=new dst-address-list=to_vpn_list action=mark-connection new-connection-mark=to_vpn_mark passthrough=yes comment="mikwg: mark connection out"
+/ip/firewall/mangle/add chain=output connection-mark=to_vpn_mark action=mark-routing new-routing-mark=to_vpn_table passthrough=no comment="mikwg: router via vpn"
 ```
-Anti-loop `accept` обязателен и должен быть **выше** правил маркировки, иначе
-трафик до сервера (если его IP попал в `to_vpn_list`) зациклится.
+Скрипт **пересобирает** все правила с комментарием `mikwg:` на каждом импорте
+(удалить + добавить заново), поэтому порядок детерминирован, а старая раскладка
+мигрируется тем же импортом. `vpn return` обязан быть **первым** в prerouting —
+это горячее (загрузочное) направление из туннеля, и такой порядок выводит его из
+mangle сразу. Anti-loop — **выше** правил маркировки, иначе трафик до сервера
+(если его IP попал в `to_vpn_list`) зациклится. Просмотр `to_vpn_list` выполняется
+только для `connection-state=new`; установленные пакеты маршрутизируются по одной
+`connection-mark`.
 
 **FastTrack-ловушка:** FastTrack обходит `mangle` и ломает policy routing. Скрипт
 идемпотентно выставляет `connection-mark=!to_vpn_mark` на правило(а)
@@ -676,6 +689,39 @@ AmneziaWG 3.1; watchdog и start-on-boot на месте; `to_vpn_list`/`to_vpn_
 протокола, работоспособные команды. Добавить раздел «Как обновлять параметры
 обфускации» (Amnezia иногда ротирует конфиги: заменить awg0.conf →
 `/container/restart` + обновить peer/rscgen). Тег `v1.0.0`.
+
+---
+
+## Оптимизация hot path и файрвола (2026-10-03) — сделано, остаток F
+
+Минимизирована работа с памятью на пути данных и упорядочена обработка пакетов
+файрволом:
+
+- `TransformIn`: точный пре-чек длины handshake (датаграммы init/resp/cookie
+  имеют фиксированный размер `S+148/92/64`; остальное сразу в
+  `unwrapTransport`) и расшифровка заголовка **in-place** в приёмном буфере — без
+  `make+copy`;
+- `WrapTransportInPlace`: исходящее кадрирование **in-place** в буфере с запасом
+  `S4` слева — тело пакета не копируется, буфер не аллоцируется;
+- паддинг S1–S4 из буферизованного `crypto/rand` (`internal/awg/rand.go`) — без
+  getrandom-syscall на исходящий пакет;
+- прокси: `ReadFromUDPAddrPort`/`WriteToUDPAddrPort`, адрес роутера как
+  `netip.AddrPort`, обновляется только при смене (без аллокаций на пакет);
+- `rscgen`: mangle пересобирается в фиксированном порядке на каждом импорте —
+  `vpn return` первым (горячее направление), `anti-loop`, затем
+  `connection-state=new` + `mark-connection` и дешёвая per-packet маркировка по
+  `connection-mark`; отдельная пара правил в `output` + свой anti-loop.
+
+Бенчмарки трансформаций (Apple M5 Pro, Go 1.26): inbound transport
+795 ns/2944 B/5 allocs → 178 ns/384 B/1 alloc; outbound transport
+497 ns/1944 B/3 allocs → 167 ns/384 B/1 alloc; initiation
+251 ns/544 B/2 allocs → 202 ns/384 B/1 alloc.
+
+**TODO (этап F):** снять последнюю аллокацию — `chacha20.Cipher` (384 B на
+пакет). Собственная block-функция ChaCha20 с предвычисленным ключевым состоянием
+(`HeaderProtectionKey` фиксирован, нужно ≤16 Б keystream), обязательны
+golden-тесты против `golang.org/x/crypto/chacha20` на случайных nonce. Включать по
+результатам замера на роутере (остаточный GC на целевой скорости).
 
 ---
 

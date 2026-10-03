@@ -1,7 +1,6 @@
 package awg
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	mrand "math/rand/v2"
@@ -86,7 +85,7 @@ func (p *Params) junkPacket() []byte {
 		n += mrand.IntN(p.Jmax - p.Jmin)
 	}
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
+	randFill(b)
 	return b
 }
 
@@ -96,9 +95,7 @@ func (p *Params) wrapHandshake(pkt []byte, s int, h Range, wantSize int) ([]byte
 		return nil, fmt.Errorf("bad handshake size %d, want %d", len(pkt), wantSize)
 	}
 	out := make([]byte, s+len(pkt))
-	if _, err := rand.Read(out[:s]); err != nil {
-		return nil, err
-	}
+	randFill(out[:s])
 	copy(out[s:], pkt)
 	binary.LittleEndian.PutUint32(out[s:s+4], h.Pick())
 	if err := p.hpXOR(out[:s], out[s:]); err != nil {
@@ -107,24 +104,44 @@ func (p *Params) wrapHandshake(pkt []byte, s int, h Range, wantSize int) ([]byte
 	return out, nil
 }
 
-// wrapTransport builds [pad(S4)][HP(first 16 bytes)][ciphertext...].
+// wrapTransport builds [pad(S4)][HP(first 16 bytes)][ciphertext...] into a
+// freshly allocated datagram. This is the cold path (tests and handshake-adjacent
+// callers); the proxy's hot path uses WrapTransportInPlace.
 func (p *Params) wrapTransport(pkt []byte) ([]byte, error) {
 	if len(pkt) < SizeTransport {
 		return nil, errShortPacket
 	}
 	out := make([]byte, p.S4+len(pkt))
-	if _, err := rand.Read(out[:p.S4]); err != nil {
-		return nil, err
-	}
 	copy(out[p.S4:], pkt)
-	binary.LittleEndian.PutUint32(out[p.S4:p.S4+4], p.H4.Pick())
+	return p.encodeTransport(out, len(pkt))
+}
 
-	cip, err := p.headerCipher(out[:p.S4])
+// WrapTransportInPlace frames the canonical transport message that already
+// occupies buf[S4:S4+n], exactly as the proxy's read buffer is laid out: the S4
+// random prefix and the protected 16-byte header are written in place and
+// buf[:S4+n] is returned. The message body is never copied and nothing is
+// allocated.
+func (p *Params) WrapTransportInPlace(buf []byte, n int) ([]byte, error) {
+	return p.encodeTransport(buf, n)
+}
+
+// encodeTransport frames the canonical message of msgLen bytes located at
+// dst[S4:] and returns dst[:S4+msgLen].
+func (p *Params) encodeTransport(dst []byte, msgLen int) ([]byte, error) {
+	s := p.S4
+	if msgLen < SizeTransport || len(dst) < s+msgLen {
+		return nil, errShortPacket
+	}
+	randFill(dst[:s])
+	out := dst[:s+msgLen]
+	binary.LittleEndian.PutUint32(out[s:s+4], p.H4.Pick())
+
+	cip, err := p.headerCipher(out[:s])
 	if err != nil {
 		return nil, err
 	}
 	if cip != nil {
-		head := out[p.S4 : p.S4+TransportHeaderSize]
+		head := out[s : s+TransportHeaderSize]
 		cip.XORKeyStream(head, head)
 	}
 	return out, nil
@@ -143,7 +160,11 @@ func (p *Params) hpXOR(salt, msg []byte) error {
 }
 
 func (p *Params) unwrapHandshake(pkt []byte, s int, h Range, msgSize, msgType int) ([]byte, bool) {
-	if len(pkt) < s+msgSize {
+	// Handshake datagrams have a fixed total size (S padding + fixed-size
+	// message), so a length mismatch rules this type out without even touching
+	// the cipher. This keeps ordinary transport packets off the handshake
+	// probes, of which there would otherwise be three per packet.
+	if len(pkt) != s+msgSize {
 		return nil, false
 	}
 	cip, err := p.headerCipher(pkt)
@@ -161,11 +182,12 @@ func (p *Params) unwrapHandshake(pkt []byte, s int, h Range, msgSize, msgType in
 		return nil, false
 	}
 
-	msg := make([]byte, msgSize)
-	copy(msg, pkt[s:s+msgSize])
+	// Decrypt in place: on success the datagram storage is dead (the caller
+	// sends the result and reuses the read buffer). Note the nonce lives in
+	// pkt[:12], before s, so it is untouched. The first 4 bytes are replaced
+	// with the canonical message type below.
+	msg := pkt[s : s+msgSize]
 	if cip != nil {
-		// Continue the keystream from position 4 (the first 4 bytes are
-		// overwritten with the canonical type below).
 		cip.XORKeyStream(msg[4:], msg[4:])
 	}
 	binary.LittleEndian.PutUint32(msg[0:4], uint32(msgType))
@@ -190,8 +212,10 @@ func (p *Params) unwrapTransport(pkt []byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	msg := make([]byte, len(pkt)-s)
-	copy(msg, pkt[s:])
+	// Decrypt the 16-byte header in place and restore the canonical type. The
+	// ciphertext body from msg[TransportHeaderSize:] is left untouched; the
+	// nonce at pkt[:S4] is before the message, so it is not clobbered.
+	msg := pkt[s:]
 	if cip != nil {
 		cip.XORKeyStream(msg[4:TransportHeaderSize], msg[4:TransportHeaderSize])
 	}
