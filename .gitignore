@@ -1,0 +1,25 @@
+# Binaries / build artifacts
+/awg-converter
+/rscgen
+*.tar
+bin/
+dist/
+
+# Test artifacts
+testbench/pcap/
+testbench/report/
+*.pcap
+
+# Local secrets — NEVER commit real AmneziaWG configs or private keys
+*.conf
+!testbench/**/*.example.conf
+.env
+*.key
+
+# Generated RouterOS scripts contain secrets
+*.generated.rsc
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
