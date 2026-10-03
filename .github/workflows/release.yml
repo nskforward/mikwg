@@ -39,6 +39,19 @@ jobs:
       - name: Build converter (linux/arm64)
         run: make build VERSION=${{ steps.ver.outputs.version }}
 
+      - name: Build rscgen (cross-platform)
+        run: |
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            ext=""
+            [ "$os" = "windows" ] && ext=".exe"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -o "dist/rscgen-${{ steps.ver.outputs.version }}-${os}-${arch}${ext}" \
+              ./cmd/rscgen
+          done
+
       - name: Build image tar and push to Docker Hub
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
@@ -56,5 +69,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: awg-converter-arm64.tar
+          files: |
+            awg-converter-arm64.tar
+            dist/rscgen-*
           generate_release_notes: true
