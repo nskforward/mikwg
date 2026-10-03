@@ -84,7 +84,8 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 #   5) make sure management access survives the changes (LAN port / Winbox-by-MAC);
 #      see docs/safe-operations.md.
 #      If an older mikwg image is already installed, this script updates it first.
-#
+{{if .Image}}#      Later, update the image in place with:  /system/script/run awg-update
+{{end}}#
 # Run with:  /import file=routeros.generated.rsc
 # The script is idempotent: existing objects are detected and reused, so it is
 # safe to import over a working configuration.
@@ -299,7 +300,30 @@ const script = `# RouterOS 7.24+ provisioning for mikwg (AmneziaWG 3.1 via WireG
 :if ([:len [/system/scheduler find name="awg-watchdog"]] = 0) do={
     /system/scheduler/add name=awg-watchdog interval=1m on-event="/system/script/run awg-watchdog"
 }
-`
+
+# --- 8. One-command image update ------------------------------------------
+{{if .Image}}# Pull the target image and restart the container on the fresh binary:
+#   /system/script/run awg-update
+# The body is rebuilt on every import, so the target tag stays in sync with
+# this script. The watchdog is paused during the pull so it cannot restart the
+# container mid-download (images are small, ~1 MB).
+:do { /system/script/remove [find name="awg-update"] } on-error={}
+/system/script/add name=awg-update source={
+    :log info "mikwg: image update started"
+    :do { /system/scheduler/set [find name="awg-watchdog"] disabled=yes } on-error={}
+    :do { /container/stop {{.Container}} } on-error={}
+    :if ([/container/get [find name="{{.Container}}"] remote-image] != "{{.Image}}") do={
+        /container/set [find name="{{.Container}}"] remote-image={{.Image}}
+    }
+    :do { /container/update {{.Container}} } on-error={}
+    :do { /container/start {{.Container}} } on-error={}
+    :do { /system/scheduler/set [find name="awg-watchdog"] disabled=no } on-error={}
+    :log info "mikwg: image update finished"
+}
+{{else}}# Offline (tar) mode: images are updated by uploading a new tar and re-importing
+# this script, so remove the one-command updater if a previous import made one.
+:do { /system/script/remove [find name="awg-update"] } on-error={}
+{{end}}`
 
 func main() {
 	confPath := flag.String("conf", "awg0.conf", "path to the real AmneziaWG config")

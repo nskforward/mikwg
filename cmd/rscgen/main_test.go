@@ -79,6 +79,55 @@ func TestTemplateLegacyMountMode(t *testing.T) {
 	}
 }
 
+func TestTemplateUpdateScript(t *testing.T) {
+	// Registry mode: the one-command updater is installed and targets the tag
+	// baked into this generation.
+	d := data{
+		Container: "awg-converter",
+		Image:     "nskforward/mikwg:latest",
+		EnvMode:   true,
+		EnvList:   "awg-env",
+		ServerIP:  "203.0.113.10",
+		WGName:    "awg",
+		AddrList:  "to_vpn_list",
+		RTTable:   "to_vpn_table",
+		ConnMark:  "to_vpn_mark",
+	}
+	out := renderScript(t, d)
+	for _, want := range []string{
+		`:do { /system/script/remove [find name="awg-update"] } on-error={}`,
+		`/system/script/add name=awg-update source={`,
+		`/container/update awg-converter`,
+		`remote-image=nskforward/mikwg:latest`,
+		`[find name="awg-watchdog"] disabled=yes`,
+		`[find name="awg-watchdog"] disabled=no`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("registry-mode script missing %q", want)
+		}
+	}
+
+	// Offline (tar) mode: no updater body, and any stale one is removed.
+	tar := data{
+		Container:    "awg-converter",
+		EnvMode:      true,
+		EnvList:      "awg-env",
+		ContainerTar: "awg-converter-arm64.tar",
+		ServerIP:     "203.0.113.10",
+		WGName:       "awg",
+		AddrList:     "to_vpn_list",
+		RTTable:      "to_vpn_table",
+		ConnMark:     "to_vpn_mark",
+	}
+	tarOut := renderScript(t, tar)
+	if !strings.Contains(tarOut, `:do { /system/script/remove [find name="awg-update"] } on-error={}`) {
+		t.Fatal("tar mode should remove a stale awg-update script")
+	}
+	if strings.Contains(tarOut, `name=awg-update source={`) {
+		t.Fatal("tar mode must not install the remote-image updater")
+	}
+}
+
 func TestBuildEnvs(t *testing.T) {
 	cfg := &config.Config{
 		S1: 129, S2: 106, S3: 23, S4: 12,
