@@ -49,10 +49,10 @@ AmneziaWG не меняет криптографию WireGuard: все его м
 
 ### 1. Образ
 
-Готовый образ публикуется в Docker Hub как **`nskforward/miwg`**:
+Готовый образ публикуется в Docker Hub как **`nskforward/mikwg`**:
 
-- `nskforward/miwg:1.0.0` — зафиксированная версия (рекомендуется);
-- `nskforward/miwg:latest` — последний релиз.
+- `nskforward/mikwg:1.0.0` — зафиксированная версия (рекомендуется);
+- `nskforward/mikwg:latest` — последний релиз.
 
 Роутер забирает его напрямую при установке (`/container/add remote-image=...`),
 загружать tar в Files не нужно. Образ содержит только статический бинарник
@@ -72,10 +72,10 @@ Docker-образ для локальной проверки.
 `rscgen` читает **реальный** `awg0.conf` (вместе с секретами) и пишет скрипт
 развёртывания:
 ```bash
-go run ./cmd/rscgen -conf awg0.conf -image nskforward/miwg:1.0.0 -out routeros.generated.rsc
+go run ./cmd/rscgen -conf awg0.conf -image nskforward/mikwg:1.0.0 -out routeros.generated.rsc
 ```
 Полезные флаги: `-image` (образ из Docker Hub; по умолчанию
-`nskforward/miwg:1.0.0`; пустая строка + `-tar` включает оффлайн-режим),
+`nskforward/mikwg:1.0.0`; пустая строка + `-tar` включает оффлайн-режим),
 `-addr-list` (умолч. `to_vpn_list`), `-rt-table` (умолч.
 `to_vpn_table`), `-conn-mark` (умолч. `to_vpn_mark`), `-wan-iface-list` (умолч.
 `WAN`), `-wan-gw` (next-hop для антилуп-маршрута; по умолчанию определяется
@@ -125,7 +125,7 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/miwg:1.0.0 -out routeros.g
 
 - создаёт veth/bridge/NAT для контейнера, монтирует конфиг read-only;
 - настраивает `/container/config` (`registry-url`, `tmpdir`) и по `remote-image`
-  скачивает образ `nskforward/miwg` из Docker Hub, затем запускает контейнер
+  скачивает образ `nskforward/mikwg` из Docker Hub, затем запускает контейнер
   `awg-converter` (при оффлайн-режиме — импортирует локальный tar);
 - поднимает WireGuard с endpoint на контейнер (приватный ключ остаётся в RouterOS);
 - добавляет антилуп-маршрут до IP сервера через реальный WAN next-hop;
@@ -143,7 +143,7 @@ go run ./cmd/rscgen -conf awg0.conf -image nskforward/miwg:1.0.0 -out routeros.g
 
 1. Переключите `remote-image` на новый тег и обновите образ:
    ```rsc
-   /container/set awg-converter remote-image=nskforward/miwg:1.1.0
+   /container/set awg-converter remote-image=nskforward/mikwg:1.1.0
    /container/update awg-converter
    ```
    `/container/update` перекачивает и распаковывает образ, заменяя старый. Если
@@ -243,13 +243,13 @@ make race     # с гонками
 make bench    # бенчмарки трансформаций
 make lint     # gofmt + go vet
 make build    # кросс-сборка linux/arm64
-make push     # сборка и публикация :$(VERSION) в docker.io/nskforward/miwg
+make push     # сборка и публикация :$(VERSION) в docker.io/nskforward/mikwg
 make push-release   # то же + тег latest
 ```
 
 Публикация образа автоматизирована: пуш тега `vX.Y.Z` запускает GitHub Actions
 (`.github/workflows/release.yml`), который прогоняет тесты, пушит
-`nskforward/miwg:X.Y.Z` и `:latest` и прикладывает `awg-converter-arm64.tar` к
+`nskforward/mikwg:X.Y.Z` и `:latest` и прикладывает `awg-converter-arm64.tar` к
 GitHub Release. Нужны секреты репозитория `DOCKER_USERNAME`/`DOCKER_PASSWORD`
 (пароль — Docker Hub access token с правом push).
 Локально `make push` использует `DOCKER_USERNAME`/`DOCKER_PASSWORD` или

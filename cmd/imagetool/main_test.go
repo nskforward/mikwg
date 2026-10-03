@@ -55,7 +55,7 @@ func TestBuildAndPush(t *testing.T) {
 	s := httptest.NewServer(registry.New())
 	defer s.Close()
 	host := strings.TrimPrefix(s.URL, "http://")
-	ref, err := name.NewTag(host+"/nskforward/miwg:"+version, name.Insecure)
+	ref, err := name.NewTag(host+"/nskforward/mikwg:"+version, name.Insecure)
 	if err != nil {
 		t.Fatalf("ref: %v", err)
 	}

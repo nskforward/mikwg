@@ -21,7 +21,7 @@
 | 1. Спецификация протокола | ✅ выполнено | [`docs/protocol-notes.md`](docs/protocol-notes.md). **Главный риск снят:** MAC1/MAC2 считаются над каноническим WG-сообщением до шифрования заголовка ⇒ пересчёт MAC не нужен |
 | 2. Конвертер | ✅ выполнено | `internal/awg`, `internal/config`, `internal/proxy`, `cmd/awg-converter`. `go vet`/`gofmt` чисто, тесты (включая сквозной UDP round-trip) зелёные |
 | 3. Локальный интероп-стенд | 🟡 частично | вместо docker-стенда — in-process UDP round-trip тест (`internal/proxy/proxy_test.go`); боевой интероп с реальным сервером проверяем на роутере (Этап 5) |
-| 4. Образ + rscgen | ✅ выполнено | `Dockerfile`, `build.sh`, `build-nodocker.sh`, `cmd/imagetool` (tar + **push в Docker Hub**), `cmd/rscgen` (registry-режим `-image` и оффлайн `-tar`), `.github/workflows/release.yml`. Образ публикуется как `nskforward/miwg`; tar — оффлайн-опция. **Важно:** tar собирается с **несжатым** rootfs-слоем (`imagetool` → `static.NewLayer(..., OCIUncompressedLayer)`), иначе RouterOS 7.24 не импортирует образ (`error getting layer file / failed to load next entry`); тот же несжатый слой пушится в реестр для `remote-image` |
+| 4. Образ + rscgen | ✅ выполнено | `Dockerfile`, `build.sh`, `build-nodocker.sh`, `cmd/imagetool` (tar + **push в Docker Hub**), `cmd/rscgen` (registry-режим `-image` и оффлайн `-tar`), `.github/workflows/release.yml`. Образ публикуется как `nskforward/mikwg`; tar — оффлайн-опция. **Важно:** tar собирается с **несжатым** rootfs-слоем (`imagetool` → `static.NewLayer(..., OCIUncompressedLayer)`), иначе RouterOS 7.24 не импортирует образ (`error getting layer file / failed to load next entry`); тот же несжатый слой пушится в реестр для `remote-image` |
 | 5. Настройка RouterOS | 🟢 развёрнуто, data-path работает | объекты на роутере подняты (veth/bridge/container/WG/mangle/routes/watchdog), `to_vpn_list`/`to_vpn_table` переиспользованы, дефолт не тронут. Блокер data-path закрыт (см. «✅ Блокер закрыт»): исправлен антилуп-маршрут и добавлен srcnat в туннель; проверено `ping 10.8.2.1` и `fetch` через туннель. Осталось: подтверждение с LAN-клиента и приёмка (Этап 6) |
 | 6. Приёмка | ⬜ не начато | после Этапа 5 |
 | 7. README | 🟡 частично | README/docs актуализированы под «без сбросов» и выборочную маршрутизацию; цифры производительности — после Этапа 6 |
@@ -529,7 +529,7 @@ WAN — исключает ручные опечатки. Переиспольз
 
 ### Публикация в Docker Hub (2026-10-03) — ✅ выполнено
 
-Образ публикуется как `docker.io/nskforward/miwg`; установка идёт через
+Образ публикуется как `docker.io/nskforward/mikwg`; установка идёт через
 `/container/add remote-image=`, а не через загрузку tar в Files.
 
 - **`cmd/imagetool`:** добавлен режим `-push` (флаги `-image` — репозиторий,
@@ -540,7 +540,7 @@ WAN — исключает ручные опечатки. Переиспольз
   `DOCKER_PASSWORD` или `docker login`; Docker-демон не нужен. Тест
   `cmd/imagetool/main_test.go` пушит в in-process OCI-registry и читает образ
   обратно — валидирует форму без Docker и без сети.
-- **`cmd/rscgen`:** новый флаг `-image` (по умолчанию `nskforward/miwg:1.0.0`)
+- **`cmd/rscgen`:** новый флаг `-image` (по умолчанию `nskforward/mikwg:1.0.0`)
   включает registry-режим: `/container/config/set registry-url=... tmpdir=...` +
   `/container/add remote-image=... root-dir=...`. Пустой `-image` сохраняет
   оффлайн-путь через `file=<tar>`. Флаги `-registry`, `-root-dir`, `-tmpdir`.
@@ -548,9 +548,9 @@ WAN — исключает ручные опечатки. Переиспольз
   `make lint test` → `make build` → `imagetool -push` тегов `X.Y.Z` и `latest` +
   `awg-converter-arm64.tar` → GitHub Release. Секреты `DOCKER_USERNAME`/
   `DOCKER_PASSWORD`.
-- **Makefile:** `push` / `push-release`; `REGISTRY ?= docker.io/nskforward/miwg`.
+- **Makefile:** `push` / `push-release`; `REGISTRY ?= docker.io/nskforward/mikwg`.
 
-**Критерий выхода (обновлено):** образ `nskforward/miwg` собирается и пушится без
+**Критерий выхода (обновлено):** образ `nskforward/mikwg` собирается и пушится без
 Docker-демона; RouterOS 7.24 поднимает контейнер из `remote-image`; tar остаётся
 оффлайн-опцией.
 
